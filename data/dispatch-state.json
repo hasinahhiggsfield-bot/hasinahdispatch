@@ -1,0 +1,29 @@
+{
+  "users": [
+    {
+      "id": "usr-movne3w7-6524b5",
+      "role": "admin",
+      "name": "يحيى",
+      "username": "yahya",
+      "password": "123123",
+      "phone": ""
+    },
+    {
+      "id": "drv-movnnm02-4325a8",
+      "role": "driver",
+      "name": "faisal almuflehi",
+      "phone": "0512312312",
+      "username": "faisal",
+      "password": "123123"
+    },
+    {
+      "id": "drv-tariq-123123",
+      "role": "driver",
+      "name": "tariq",
+      "phone": "",
+      "username": "tariq",
+      "password": "123123"
+    }
+  ],
+  "orders": []
+}
