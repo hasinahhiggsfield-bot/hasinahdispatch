@@ -391,6 +391,7 @@ function createOrder(targetState, body) {
     customAmount: kind === "custom" ? customAmount : 0,
     timerHours: kind === "custom" ? Math.max(1, timerHours || 24) : 24,
     requestDate: body.requestDate ? new Date(body.requestDate).toISOString() : now,
+    orderCreatedAt: now,
     status: kind === "custom" && body.driverId ? "pending_acceptance" : body.driverId ? "ready" : "new",
     acceptedAt: "",
     pickedUpAt: "",
@@ -629,7 +630,8 @@ function setView(view) {
   if (user.role === "driver") view = "driver";
   currentView = view;
   document.querySelectorAll(".nav-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
-  document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active-view", section.id === `${view}View`));
+  const sectionView = view === "zidOrders" ? "orders" : view;
+  document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active-view", section.id === `${sectionView}View`));
   els.searchInput.parentElement.classList.toggle("hidden", ["submit", "addDriver", "accounts", "requests"].includes(view));
   els.viewTitle.textContent = { submit: "إضافة طلب", orders: "لوحة الطلبات", driver: "السائق", accounts: "الحسابات", requests: "المراجعة" }[view];
   els.viewTitle.textContent = {
@@ -640,6 +642,7 @@ function setView(view) {
     accounts: "الحسابات",
     requests: "المراجعة"
   }[view] || els.viewTitle.textContent;
+  if (view === "zidOrders") els.viewTitle.textContent = "طلبات زد";
   render();
 }
 
@@ -662,6 +665,10 @@ function getFlowType(order) {
   if (order.type === "Return") return "return";
   if (order.type === "Replacement") return "replacement";
   return "order";
+}
+
+function isZidOrder(order) {
+  return Boolean(order.zid?.id || order.zidStatusCode || order.zidStatusName);
 }
 
 function ensureDriverSelection() {
@@ -755,7 +762,10 @@ function renderOrdersBoard() {
   const status = els.statusFilter.value;
   const category = els.categoryFilter.value;
   const driverId = els.driverFilter.value;
-  let baseOrders = matchingOrders(state.orders);
+  const sourceOrders = currentView === "zidOrders"
+    ? state.orders.filter(isZidOrder)
+    : state.orders.filter((order) => !isZidOrder(order));
+  let baseOrders = matchingOrders(sourceOrders);
   if (driverId !== "all") baseOrders = baseOrders.filter((order) => order.driverId === driverId);
   renderStats(els.orderStats, baseOrders);
   let orders = baseOrders;
@@ -843,6 +853,10 @@ function renderRequests() {
 }
 
 function renderOrderCard(order, mode) {
+  const createdDate = order.orderCreatedAt || order.requestDate || order.createdAt || "";
+  const orderNumberHtml = mode === "admin" && order.zid?.url
+    ? `<a href="${escapeAttribute(order.zid.url)}" target="_blank" rel="noreferrer">${escapeHtml(order.number)}</a>`
+    : escapeHtml(order.number);
   const driver = state.users.find((item) => item.id === order.driverId);
   const pay = getPay(order);
   const deadline = order.deadlineAt ? formatDeadline(order.deadlineAt) : "لم يستلم بعد";
@@ -883,8 +897,8 @@ function renderOrderCard(order, mode) {
     <article class="order-card" data-priority="${escapeHtml(order.kind)}">
       <div class="order-card-header">
         <div>
-          <strong>${escapeHtml(order.number)} - ${escapeHtml(order.customer)}</strong>
-          <div class="order-details">${escapeHtml(order.area)} | ${escapeHtml(typeLabels[order.type] || order.type)}</div>
+          <strong>${orderNumberHtml} - ${escapeHtml(order.customer)}</strong>
+          <div class="order-details">${escapeHtml(order.area)} | ${escapeHtml(typeLabels[order.type] || order.type)} | تاريخ الإنشاء: ${escapeHtml(createdDate ? formatDateTime(createdDate) : "غير محدد")}</div>
           <div class="order-status-line">الحالة الحالية: <strong>${escapeHtml(statusText)}</strong>${driver ? ` | السائق: <strong>${escapeHtml(driver.name)}</strong>` : " | غير مسند"}</div>
         </div>
         <span class="status-pill status-${order.status}">${escapeHtml(statusText)}</span>
@@ -1080,6 +1094,12 @@ function formatDeadline(value) {
 
 function formatDate(value) {
   return new Date(value).toLocaleDateString("ar-SA", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "غير محدد";
+  return date.toLocaleString("ar-SA", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function getEmptyState(title, message) {
