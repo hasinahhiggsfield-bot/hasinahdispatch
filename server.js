@@ -13,6 +13,10 @@ const SUPABASE_STATE_ID = "dispatch";
 const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ZID_API_BASE = "https://api.zid.sa/v1/managers";
+const ZID_OAUTH_BASE = (process.env.ZID_OAUTH_URL || "https://oauth.zid.sa").replace(/\/$/, "");
+const ZID_CLIENT_ID = process.env.ZID_CLIENT_ID || "";
+const ZID_CLIENT_SECRET = process.env.ZID_CLIENT_SECRET || "";
+const ZID_REDIRECT_URI = process.env.ZID_REDIRECT_URI || "";
 const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_IN_DELIVERY_STATUS = process.env.ZID_IN_DELIVERY_STATUS || "indelivery";
@@ -296,9 +300,16 @@ function normalizeText(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function zidHeaders(extra = {}) {
-  const authorization = process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH || "";
-  const managerToken = process.env.ZID_MANAGER_TOKEN || process.env.ZID_ACCESS_TOKEN || "";
+function zidTokenFromState(state) {
+  return state?.integrations?.zid || {};
+}
+
+function zidHeaders(state, extra = {}) {
+  const zidAuth = zidTokenFromState(state);
+  const token = zidAuth.access_token || zidAuth.accessToken || "";
+  const tokenType = zidAuth.token_type || zidAuth.tokenType || "Bearer";
+  const authorization = process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH || (token ? `${tokenType} ${token}` : "");
+  const managerToken = process.env.ZID_MANAGER_TOKEN || process.env.ZID_ACCESS_TOKEN || zidAuth.manager_token || zidAuth.managerToken || token || "";
   if (!authorization || !managerToken) throw new Error("Zid credentials are missing.");
   return {
     Authorization: authorization,
@@ -445,7 +456,7 @@ async function syncZidOrders(state) {
 
   for (let page = 1; page <= pageLimit; page += 1) {
     const response = await fetch(`${ZID_API_BASE}/store/orders?payload_type=full&page=${page}&per_page=50`, {
-      headers: zidHeaders({ Accept: "application/json" })
+      headers: zidHeaders(state, { Accept: "application/json" })
     });
     if (!response.ok) throw new Error(`Zid sync failed with ${response.status}.`);
     const payload = await response.json();
@@ -465,7 +476,7 @@ async function syncZidOrders(state) {
   return { imported, skipped };
 }
 
-async function updateZidOrderStatus(order, statusCode = ZID_IN_DELIVERY_STATUS) {
+async function updateZidOrderStatus(order, statusCode = ZID_IN_DELIVERY_STATUS, state = null) {
   if (!order?.zid?.id) return { skipped: true };
   const body = new FormData();
   body.set("order_status", statusCode);
@@ -475,7 +486,7 @@ async function updateZidOrderStatus(order, statusCode = ZID_IN_DELIVERY_STATUS) 
   body.set("inventory_address_id", process.env.ZID_INVENTORY_ADDRESS_ID || "");
   const response = await fetch(`${ZID_API_BASE}/store/orders/${encodeURIComponent(order.zid.id)}/change-order-status`, {
     method: "POST",
-    headers: zidHeaders({ Accept: "application/json" }),
+    headers: zidHeaders(state, { Accept: "application/json" }),
     body
   });
   if (!response.ok) throw new Error(`Zid status update failed with ${response.status}.`);
@@ -489,6 +500,70 @@ function checkWebhookAuth(req) {
   const header = String(req.headers.authorization || "");
   const expected = `Basic ${Buffer.from(`${expectedUser}:${expectedPassword}`).toString("base64")}`;
   return header === expected;
+}
+
+function absoluteCallbackUrl(req) {
+  if (ZID_REDIRECT_URI) return ZID_REDIRECT_URI;
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const protocol = req.headers["x-forwarded-proto"] || "https";
+  return `${protocol}://${host}/api/zid/oauth/callback`;
+}
+
+async function exchangeZidCode(req, code) {
+  if (!ZID_CLIENT_ID || !ZID_CLIENT_SECRET) {
+    throw new Error("Zid Client ID and Client Secret are missing in Render environment variables.");
+  }
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    client_id: ZID_CLIENT_ID,
+    client_secret: ZID_CLIENT_SECRET,
+    redirect_uri: absoluteCallbackUrl(req)
+  });
+  const response = await fetch(`${ZID_OAUTH_BASE}/oauth/token`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+  const text = await response.text();
+  let payload = {};
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch {
+    payload = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(`Zid authorization failed (${response.status}): ${payload.message || payload.error || text}`);
+  }
+  return payload;
+}
+
+function htmlPage(title, message) {
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${svgText(title)}</title>
+    <style>
+      body{margin:0;font-family:Arial,Tahoma,sans-serif;background:#101416;color:#f8fafc;display:grid;min-height:100vh;place-items:center}
+      main{width:min(520px,calc(100% - 32px));background:#181f22;border:1px solid #314044;border-radius:16px;padding:28px;box-shadow:0 20px 60px #0008}
+      h1{margin:0 0 12px;font-size:28px}
+      p{margin:0 0 18px;color:#cbd5d8;line-height:1.8}
+      a{display:inline-block;background:#b54132;color:white;text-decoration:none;border-radius:10px;padding:12px 18px;font-weight:700}
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${svgText(title)}</h1>
+      <p>${svgText(message)}</p>
+      <a href="/">فتح تطبيق حسينة</a>
+    </main>
+  </body>
+</html>`;
 }
 
 function createAccount(state, body) {
@@ -790,7 +865,7 @@ async function handleApi(req, res, url) {
     const assigned = assignNeighborhood(state, await readBody(req));
     for (const order of assigned) {
       try {
-        await updateZidOrderStatus(order);
+        await updateZidOrderStatus(order, ZID_IN_DELIVERY_STATUS, state);
         order.zidStatusCode = ZID_IN_DELIVERY_STATUS;
         order.zidStatusName = "قيد التوصيل";
         order.zid.lastStatusPushAt = new Date().toISOString();
@@ -807,6 +882,34 @@ async function handleApi(req, res, url) {
     const result = await syncZidOrders(state);
     await writeState(state);
     send(res, 200, { ...publicState(state), zidSync: result });
+    return true;
+  }
+
+  if (url.pathname === "/api/zid/oauth/callback" && req.method === "GET") {
+    const code = url.searchParams.get("code") || url.searchParams.get("authorization_code");
+    state.integrations = state.integrations || {};
+    state.integrations.zidLastCallback = {
+      at: new Date().toISOString(),
+      query: Object.fromEntries(url.searchParams.entries())
+    };
+    if (!code) {
+      await writeState(state);
+      send(res, 200, htmlPage("تم الوصول لرابط زد", "الرابط يعمل الآن، لكن Zid لم يرسل كود التفعيل في هذا الطلب."), "text/html; charset=utf-8");
+      return true;
+    }
+    try {
+      const tokens = await exchangeZidCode(req, code);
+      state.integrations.zid = {
+        ...tokens,
+        authorizedAt: new Date().toISOString()
+      };
+      await writeState(state);
+      send(res, 200, htmlPage("تم تفعيل ربط زد", "تم حفظ بيانات الربط بنجاح. يمكنك الآن الرجوع إلى تطبيق حسينة ومزامنة الطلبات."), "text/html; charset=utf-8");
+    } catch (error) {
+      state.integrations.zidLastError = { at: new Date().toISOString(), message: error.message };
+      await writeState(state);
+      send(res, 500, htmlPage("تعذر تفعيل ربط زد", error.message), "text/html; charset=utf-8");
+    }
     return true;
   }
 
@@ -863,7 +966,7 @@ async function handleApi(req, res, url) {
     const order = state.orders.find((item) => item.id === id);
     if (order?.driverId && order?.zid?.id && (Object.prototype.hasOwnProperty.call(patch, "driverId") || patch.action === "pickup")) {
       try {
-        await updateZidOrderStatus(order);
+        await updateZidOrderStatus(order, ZID_IN_DELIVERY_STATUS, state);
         order.zidStatusCode = ZID_IN_DELIVERY_STATUS;
         order.zidStatusName = "قيد التوصيل";
         order.zid.lastStatusPushAt = new Date().toISOString();
