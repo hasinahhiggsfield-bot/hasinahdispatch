@@ -509,6 +509,16 @@ function absoluteCallbackUrl(req) {
   return `${protocol}://${host}/api/zid/oauth/callback`;
 }
 
+function zidInstallUrl(req) {
+  if (!ZID_CLIENT_ID) throw new Error("Zid Client ID is missing in Render environment variables.");
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: ZID_CLIENT_ID,
+    redirect_uri: absoluteCallbackUrl(req)
+  });
+  return `${ZID_OAUTH_BASE}/oauth/authorize?${params.toString()}`;
+}
+
 async function exchangeZidCode(req, code) {
   if (!ZID_CLIENT_ID || !ZID_CLIENT_SECRET) {
     throw new Error("Zid Client ID and Client Secret are missing in Render environment variables.");
@@ -882,6 +892,16 @@ async function handleApi(req, res, url) {
     const result = await syncZidOrders(state);
     await writeState(state);
     send(res, 200, { ...publicState(state), zidSync: result });
+    return true;
+  }
+
+  if (url.pathname === "/api/zid/install" && req.method === "GET") {
+    try {
+      res.writeHead(302, { location: zidInstallUrl(req), "cache-control": "no-store" });
+      res.end();
+    } catch (error) {
+      send(res, 500, htmlPage("تعذر بدء تفعيل زد", error.message), "text/html; charset=utf-8");
+    }
     return true;
   }
 
