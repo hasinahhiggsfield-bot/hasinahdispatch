@@ -304,11 +304,17 @@ function zidTokenFromState(state) {
   return state?.integrations?.zid || {};
 }
 
+function formatZidAuthorization(value) {
+  const token = String(value || "").trim();
+  if (!token) return "";
+  return /^Bearer\s+/i.test(token) ? token : `Bearer ${token}`;
+}
+
 function zidHeaders(state, extra = {}) {
   const zidAuth = zidTokenFromState(state);
   const token = zidAuth.access_token || zidAuth.accessToken || "";
   const authToken = zidAuth.Authorization || zidAuth.authorization || zidAuth.auth_token || zidAuth.authToken || "";
-  const authorization = process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH || authToken || (token ? `Bearer ${token}` : "");
+  const authorization = formatZidAuthorization(process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH || authToken || token);
   const managerToken = process.env.ZID_MANAGER_TOKEN || process.env.ZID_ACCESS_TOKEN || zidAuth.manager_token || zidAuth.managerToken || token || "";
   if (!authorization || !managerToken) throw new Error("Zid credentials are missing.");
   return {
@@ -491,6 +497,44 @@ async function updateZidOrderStatus(order, statusCode = ZID_IN_DELIVERY_STATUS, 
   });
   if (!response.ok) throw new Error(`Zid status update failed with ${response.status}.`);
   return response.json();
+}
+
+async function zidDebugStatus(state) {
+  const zidAuth = zidTokenFromState(state);
+  const keys = Object.keys(zidAuth).filter((key) => !/token|secret|authorization/i.test(key)).sort();
+  const sensitiveKeys = Object.keys(zidAuth).filter((key) => /token|secret|authorization/i.test(key)).sort();
+  const debug = {
+    configured: {
+      hasClientId: Boolean(ZID_CLIENT_ID),
+      hasClientSecret: Boolean(ZID_CLIENT_SECRET),
+      hasRedirectUri: Boolean(ZID_REDIRECT_URI),
+      hasEnvAuthorization: Boolean(process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH),
+      hasEnvManagerToken: Boolean(process.env.ZID_MANAGER_TOKEN || process.env.ZID_ACCESS_TOKEN)
+    },
+    saved: {
+      hasSavedZidAuth: Boolean(Object.keys(zidAuth).length),
+      visibleKeys: keys,
+      sensitiveKeys,
+      hasAuthorization: Boolean(zidAuth.Authorization || zidAuth.authorization || zidAuth.auth_token || zidAuth.authToken),
+      hasAccessToken: Boolean(zidAuth.access_token || zidAuth.accessToken),
+      authorizedAt: zidAuth.authorizedAt || ""
+    },
+    lastCallback: state.integrations?.zidLastCallback || null,
+    lastError: state.integrations?.zidLastError || null
+  };
+  try {
+    const response = await fetch(`${ZID_API_BASE}/store/orders?payload_type=full&page=1&per_page=1`, {
+      headers: zidHeaders(state, { Accept: "application/json" })
+    });
+    debug.ordersTest = {
+      ok: response.ok,
+      status: response.status,
+      body: (await response.text()).slice(0, 500)
+    };
+  } catch (error) {
+    debug.ordersTest = { ok: false, message: error.message };
+  }
+  return debug;
 }
 
 function checkWebhookAuth(req) {
@@ -836,6 +880,11 @@ async function handleApi(req, res, url) {
       storage: USE_SUPABASE ? "supabase" : "json",
       zidAuthorized: Boolean(zidAuth.Authorization || zidAuth.authorization || zidAuth.access_token || process.env.ZID_AUTHORIZATION)
     });
+    return true;
+  }
+
+  if (url.pathname === "/api/zid/debug" && req.method === "GET") {
+    send(res, 200, await zidDebugStatus(state));
     return true;
   }
 
