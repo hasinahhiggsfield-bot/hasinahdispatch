@@ -13,12 +13,13 @@ const SUPABASE_STATE_ID = "dispatch";
 const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ZID_API_BASE = "https://api.zid.sa/v1/managers";
+const ZID_DASHBOARD_ORDER_BASE = process.env.ZID_DASHBOARD_ORDER_BASE || "https://dashboard.zid.sa/en-sa/stores/1102974/orders/";
 const ZID_OAUTH_BASE = (process.env.ZID_OAUTH_URL || "https://oauth.zid.sa").replace(/\/$/, "");
 const ZID_CLIENT_ID = process.env.ZID_CLIENT_ID || "";
 const ZID_CLIENT_SECRET = process.env.ZID_CLIENT_SECRET || "";
 const ZID_REDIRECT_URI = process.env.ZID_REDIRECT_URI || "";
 const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
-const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready,جاري التجهيز").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_IN_DELIVERY_STATUS = process.env.ZID_IN_DELIVERY_STATUS || "indelivery";
 
 const MIME = {
@@ -353,8 +354,8 @@ function isJeddahOrder(order) {
 }
 
 function isReadyForDispatch(order) {
-  const status = zidStatusCode(order);
-  return !ZID_READY_STATUSES.length || ZID_READY_STATUSES.includes(status);
+  const values = [zidStatusCode(order), zidStatusName(order)].map(normalizeText).filter(Boolean);
+  return !ZID_READY_STATUSES.length || ZID_READY_STATUSES.some((status) => values.includes(status));
 }
 
 function productImage(product) {
@@ -402,6 +403,16 @@ function zidOrderNumber(order) {
   return String(order?.invoice_number || order?.order_number || order?.number || order?.code || order?.id || "").trim();
 }
 
+function zidOrderCreatedAt(order) {
+  const value = order?.created_at || order?.createdAt || order?.date || order?.order_date || order?.created_date;
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.toISOString() : "";
+}
+
+function zidDashboardUrl(order, number) {
+  return order?.order_url || order?.url || `${ZID_DASHBOARD_ORDER_BASE}${encodeURIComponent(number)}`;
+}
+
 function upsertZidOrder(state, rawOrder, source = "zid") {
   const order = getZidOrder(rawOrder);
   if (!order || !zidOrderNumber(order) || !isJeddahOrder(order)) return { saved: false, reason: "not_jeddah" };
@@ -410,6 +421,7 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
   const existing = state.orders.find((item) => item.zid?.id && String(item.zid.id) === String(order.id)) || state.orders.find((item) => item.number === number);
   const address = order?.shipping?.address || {};
   const now = new Date().toISOString();
+  const orderCreatedAt = zidOrderCreatedAt(order) || existing?.orderCreatedAt || existing?.requestDate || now;
   const next = {
     id: existing?.id || uid("ord"),
     kind: "customer",
@@ -422,7 +434,8 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
     driverId: existing?.driverId || "",
     customAmount: 0,
     timerHours: 24,
-    requestDate: order?.created_at ? new Date(order.created_at).toISOString() : existing?.requestDate || now,
+    requestDate: orderCreatedAt,
+    orderCreatedAt,
     status: existing?.status && existing.status !== "new" ? existing.status : "new",
     zidStatusCode: zidStatusCode(order),
     zidStatusName: zidStatusName(order),
@@ -434,7 +447,7 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
     zid: {
       id: order.id,
       code: order.code || "",
-      url: order.order_url || "",
+      url: zidDashboardUrl(order, number),
       importedAt: existing?.zid?.importedAt || now,
       lastSyncedAt: now,
       source
@@ -667,6 +680,7 @@ function createOrder(state, body) {
     customAmount: kind === "custom" ? customAmount : 0,
     timerHours: kind === "custom" ? Math.max(1, timerHours || 24) : 24,
     requestDate: body.requestDate ? new Date(body.requestDate).toISOString() : now.toISOString(),
+    orderCreatedAt: now.toISOString(),
     status: kind === "custom" && body.driverId ? "pending_acceptance" : body.driverId ? "ready" : "new",
     acceptedAt: "",
     pickedUpAt: "",
