@@ -307,8 +307,8 @@ function zidTokenFromState(state) {
 function zidHeaders(state, extra = {}) {
   const zidAuth = zidTokenFromState(state);
   const token = zidAuth.access_token || zidAuth.accessToken || "";
-  const tokenType = zidAuth.token_type || zidAuth.tokenType || "Bearer";
-  const authorization = process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH || (token ? `${tokenType} ${token}` : "");
+  const authToken = zidAuth.Authorization || zidAuth.authorization || zidAuth.auth_token || zidAuth.authToken || "";
+  const authorization = process.env.ZID_AUTHORIZATION || process.env.ZID_AUTH || authToken || (token ? `Bearer ${token}` : "");
   const managerToken = process.env.ZID_MANAGER_TOKEN || process.env.ZID_ACCESS_TOKEN || zidAuth.manager_token || zidAuth.managerToken || token || "";
   if (!authorization || !managerToken) throw new Error("Zid credentials are missing.");
   return {
@@ -830,7 +830,12 @@ async function handleApi(req, res, url) {
   const state = await readState();
 
   if (url.pathname === "/api/health") {
-    send(res, 200, { ok: true, storage: USE_SUPABASE ? "supabase" : "json" });
+    const zidAuth = zidTokenFromState(state);
+    send(res, 200, {
+      ok: true,
+      storage: USE_SUPABASE ? "supabase" : "json",
+      zidAuthorized: Boolean(zidAuth.Authorization || zidAuth.authorization || zidAuth.access_token || process.env.ZID_AUTHORIZATION)
+    });
     return true;
   }
 
@@ -920,6 +925,7 @@ async function handleApi(req, res, url) {
     try {
       const tokens = await exchangeZidCode(req, code);
       state.integrations.zid = {
+        ...(state.integrations.zid || {}),
         ...tokens,
         authorizedAt: new Date().toISOString()
       };
