@@ -9,7 +9,7 @@
     <title>حسينة | ديسباتش السائقين</title>
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="assets/hasinah-icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=mobile-scrolltop-1" />
+    <link rel="stylesheet" href="styles.css?v=driver-scanner-2" />
   </head>
   <body>
     <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -58,6 +58,17 @@
       </symbol>
       <symbol id="icon-up" viewBox="0 0 24 24">
         <path d="m6.5 14.5 5.5-5.5 5.5 5.5" />
+      </symbol>
+      <symbol id="icon-scan" viewBox="0 0 24 24">
+        <path d="M4.8 8V5.8a1 1 0 0 1 1-1H8" />
+        <path d="M16 4.8h2.2a1 1 0 0 1 1 1V8" />
+        <path d="M19.2 16v2.2a1 1 0 0 1-1 1H16" />
+        <path d="M8 19.2H5.8a1 1 0 0 1-1-1V16" />
+        <path d="M6.8 12h10.4" />
+        <path d="M8.4 9.2v5.6" />
+        <path d="M11 9.2v5.6" />
+        <path d="M13.8 9.2v5.6" />
+        <path d="M16 9.2v5.6" />
       </symbol>
     </svg>
     <section id="loginScreen" class="login-screen">
@@ -344,6 +355,10 @@
             <p class="eyebrow">تتبع السائقين</p>
             <h3 id="driverNameHeading">السائق</h3>
             <p id="driverRouteSummary"></p>
+            <button id="openScannerBtn" class="scanner-open-button driver-only" type="button">
+              <svg aria-hidden="true"><use href="#icon-scan"></use></svg>
+              مسح بوليصة
+            </button>
             <div class="driver-money">
               <strong id="driverOwed">0 ريال</strong>
               <span>المتبقي بعد الدفعات</span>
@@ -453,10 +468,35 @@
       </form>
     </section>
 
+    <section id="scannerModal" class="modal-backdrop hidden scanner-modal">
+      <div class="modal-panel scanner-panel">
+        <div class="scanner-heading">
+          <div>
+            <p class="eyebrow">ماسح السائق</p>
+            <h3>مسح باركود البوليصة</h3>
+          </div>
+          <button id="closeScannerBtn" class="ghost-button" type="button">إغلاق</button>
+        </div>
+        <div class="scanner-camera">
+          <video id="scannerVideo" playsinline muted></video>
+          <div class="scanner-frame" aria-hidden="true"></div>
+        </div>
+        <p id="scannerStatus" class="scanner-status">وجه الكاميرا إلى باركود البوليصة.</p>
+        <div class="scanner-manual">
+          <label>
+            إدخال يدوي عند الحاجة
+            <input id="scannerManualInput" inputmode="numeric" autocomplete="off" placeholder="رقم البوليصة أو رقم الطلب" />
+          </label>
+          <button id="scannerManualBtn" class="secondary-button" type="button">تحديث الطلب</button>
+        </div>
+      </div>
+    </section>
+
     <button id="scrollTopBtn" class="scroll-top-button" type="button" aria-label="العودة للأعلى">
       <svg aria-hidden="true"><use href="#icon-up"></use></svg>
     </button>
 
-    <script src="app.js?v=mobile-scrolltop-1"></script>
+    <script src="assets/vendor-zxing-browser.min.js?v=0.1.5"></script>
+    <script src="app.js?v=driver-scanner-2"></script>
   </body>
 </html>
