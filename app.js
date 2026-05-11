@@ -4,12 +4,17 @@ const IS_FILE_MODE = window.location.protocol === "file:";
 const CUSTOMER_PAY = 30;
 const LATE_PAY = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const REFRESH_MS = 30 * 1000;
 
-let state = { users: [], orders: [] };
+let state = { users: [], orders: [], payments: [] };
 let session = loadSession();
-let currentView = "submit";
+let currentView = "dashboard";
 let activeDriverId = "";
 let refreshTimer = null;
+let viewTransitionTimer = null;
+let ambientPointerFrame = null;
+let scrollTopFrame = null;
+let lastStateSignature = "";
 
 const statusLabels = {
   new: "جديد",
@@ -66,6 +71,20 @@ const els = {
   driverOrders: document.querySelector("#driverOrders"),
   accountList: document.querySelector("#accountList"),
   requestList: document.querySelector("#requestList"),
+  dashboardStats: document.querySelector("#dashboardStats"),
+  opsQueue: document.querySelector("#opsQueue"),
+  driverScorecards: document.querySelector("#driverScorecards"),
+  neighborhoodStats: document.querySelector("#neighborhoodStats"),
+  dailyClosing: document.querySelector("#dailyClosing"),
+  paymentForm: document.querySelector("#paymentForm"),
+  paymentDriver: document.querySelector("#paymentDriver"),
+  paymentAmount: document.querySelector("#paymentAmount"),
+  paymentPaidAt: document.querySelector("#paymentPaidAt"),
+  paymentProof: document.querySelector("#paymentProof"),
+  paymentProofPreview: document.querySelector("#paymentProofPreview"),
+  paymentNote: document.querySelector("#paymentNote"),
+  paymentList: document.querySelector("#paymentList"),
+  scrollTopBtn: document.querySelector("#scrollTopBtn"),
   searchInput: document.querySelector("#searchInput"),
   categoryFilter: document.querySelector("#categoryFilter"),
   statusFilter: document.querySelector("#statusFilter"),
@@ -83,7 +102,7 @@ const els = {
 };
 
 document.querySelectorAll(".nav-tab").forEach((tab) => {
-  tab.addEventListener("click", () => setView(tab.dataset.view));
+  tab.addEventListener("click", () => navigateView(tab.dataset.view));
 });
 
 els.jobKind.addEventListener("change", () => {
@@ -162,6 +181,58 @@ els.delayForm?.addEventListener("submit", async (event) => {
   }
 });
 
+els.paymentProof?.addEventListener("change", async () => {
+  const file = els.paymentProof.files?.[0];
+  if (!file || !file.type.startsWith("image/")) {
+    els.paymentProofPreview.classList.add("hidden");
+    els.paymentProofPreview.removeAttribute("src");
+    return;
+  }
+  try {
+    const dataUrl = await imageFileToCompressedDataUrl(file);
+    els.paymentProofPreview.src = dataUrl;
+    els.paymentProofPreview.classList.remove("hidden");
+  } catch {
+    els.paymentProofPreview.classList.add("hidden");
+    els.paymentProofPreview.removeAttribute("src");
+  }
+});
+
+els.paymentForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = els.paymentProof.files?.[0];
+  if (!file) {
+    alert("ارفع إثبات الدفع قبل تسجيل الدفعة.");
+    return;
+  }
+  try {
+    const result = await api("/api/payments", {
+      method: "POST",
+      body: {
+        driverId: els.paymentDriver.value,
+        amount: els.paymentAmount.value,
+        paidAt: els.paymentPaidAt.value,
+        proof: await fileToProofDataUrl(file),
+        proofName: file.name,
+        note: els.paymentNote.value
+      }
+    });
+    applyState(result);
+    els.paymentForm.reset();
+    els.paymentProofPreview.classList.add("hidden");
+    els.paymentProofPreview.removeAttribute("src");
+    setDefaultPaymentDate();
+    render();
+    alert("تم تسجيل الدفعة وإضافتها لسجل السائق.");
+  } catch (error) {
+    alert(error.message || "تعذر تسجيل الدفعة.");
+  }
+});
+
+els.scrollTopBtn?.addEventListener("click", () => {
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
 els.activeDriverSelect.addEventListener("change", () => {
   activeDriverId = els.activeDriverSelect.value;
   render();
@@ -183,7 +254,7 @@ els.zidSyncBtn?.addEventListener("click", async () => {
   els.zidSyncBtn.textContent = "جاري المزامنة...";
   try {
     const result = await api("/api/zid/sync", { method: "POST" });
-    state = { users: result.users, orders: result.orders };
+    applyState(result);
     render();
     alert(`تمت مزامنة زد. الطلبات المستوردة: ${result.zidSync?.imported || 0}`);
   } catch (error) {
@@ -199,7 +270,7 @@ els.assignNeighborhoodBtn?.addEventListener("click", async () => {
   const area = prompt("اكتب اسم الحي كما يظهر في الطلبات:");
   if (!area || !driverId) return;
   const result = await api("/api/orders/assign-neighborhood", { method: "POST", body: { area, driverId } });
-  state = { users: result.users, orders: result.orders };
+  applyState(result);
   render();
   alert(`تم إسناد ${result.assigned || 0} طلب للسائق.`);
 });
@@ -245,6 +316,22 @@ async function api(path, options = {}) {
   return result.data || result;
 }
 
+function applyState(nextState) {
+  state = {
+    users: Array.isArray(nextState?.users) ? nextState.users : [],
+    orders: Array.isArray(nextState?.orders) ? nextState.orders : [],
+    payments: Array.isArray(nextState?.payments) ? nextState.payments : []
+  };
+  return state;
+}
+
+function updateStateSignature() {
+  const signature = JSON.stringify({ users: state.users, orders: state.orders, payments: state.payments });
+  const changed = signature !== lastStateSignature;
+  lastStateSignature = signature;
+  return changed;
+}
+
 function uid(prefix) {
   if (crypto.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
@@ -273,14 +360,18 @@ function generatePolicyNumber(targetState) {
 function seedState() {
   return {
     users: [{ id: uid("usr"), role: "admin", name: "يحيى", username: "yahya", password: "123123", phone: "" }],
-    orders: []
+    orders: [],
+    payments: []
   };
 }
 
 function readLocalState() {
   try {
     const saved = JSON.parse(localStorage.getItem(LOCAL_STATE_KEY));
-    if (Array.isArray(saved?.users) && Array.isArray(saved?.orders)) return saved;
+    if (Array.isArray(saved?.users) && Array.isArray(saved?.orders)) {
+      saved.payments = Array.isArray(saved.payments) ? saved.payments : [];
+      return saved;
+    }
   } catch {
     // Use a clean state.
   }
@@ -321,6 +412,12 @@ async function localApi(path, options = {}) {
 
   if (path === "/api/orders" && method === "POST") {
     createOrder(localState, options.body || {});
+    writeLocalState(localState);
+    return localState;
+  }
+
+  if (path === "/api/payments" && method === "POST") {
+    createPayment(localState, options.body || {});
     writeLocalState(localState);
     return localState;
   }
@@ -388,6 +485,7 @@ function createOrder(targetState, body) {
     phone: normalizePhone(body.phone),
     area: String(body.area).trim(),
     driverId: String(body.driverId || "").trim(),
+    assignedAt: body.driverId ? now : "",
     customAmount: kind === "custom" ? customAmount : 0,
     timerHours: kind === "custom" ? Math.max(1, timerHours || 24) : 24,
     requestDate: body.requestDate ? new Date(body.requestDate).toISOString() : now,
@@ -404,13 +502,39 @@ function createOrder(targetState, body) {
   });
 }
 
+function createPayment(targetState, body) {
+  targetState.payments = Array.isArray(targetState.payments) ? targetState.payments : [];
+  const driverId = String(body.driverId || "").trim();
+  const amount = Number(body.amount || 0);
+  const paidAt = body.paidAt ? new Date(body.paidAt) : new Date();
+  if (!targetState.users.some((user) => user.id === driverId && user.role === "driver")) {
+    throw new Error("اختر السائق قبل تسجيل الدفعة.");
+  }
+  if (!amount || amount <= 0) throw new Error("اكتب مبلغ دفع صحيح.");
+  if (Number.isNaN(paidAt.getTime())) throw new Error("تاريخ الدفع غير صحيح.");
+  if (!body.proof) throw new Error("إثبات الدفع مطلوب.");
+  targetState.payments.unshift({
+    id: uid("pay"),
+    driverId,
+    amount,
+    paidAt: paidAt.toISOString(),
+    proof: String(body.proof || ""),
+    proofName: String(body.proofName || "payment-proof"),
+    note: String(body.note || "").trim(),
+    createdAt: new Date().toISOString()
+  });
+}
+
 function updateOrderState(targetState, id, patch) {
   const order = targetState.orders.find((item) => item.id === id);
   if (!order) throw new Error("لم يتم العثور على الطلب.");
   const now = new Date();
+  const previousDriverId = order.driverId || "";
 
   if (Object.prototype.hasOwnProperty.call(patch, "driverId")) {
     order.driverId = String(patch.driverId || "");
+    if (!previousDriverId && order.driverId) order.assignedAt = now.toISOString();
+    if (!order.driverId) order.assignedAt = "";
     if (order.kind === "custom" && order.driverId && order.status !== "completed") order.status = "pending_acceptance";
     if (order.kind === "customer" && order.driverId && ["new", "pending_acceptance", "accepted"].includes(order.status)) order.status = "ready";
     if (!order.driverId && !["completed", "delivered"].includes(order.status)) {
@@ -570,8 +694,9 @@ function drivers() {
 }
 
 async function loadState() {
-  state = await api("/api/state");
+  applyState(await api("/api/state"));
   markLateOrders();
+  return updateStateSignature();
 }
 
 function markLateOrders() {
@@ -603,7 +728,7 @@ async function bootApp() {
   els.sessionLabel.textContent = `${user.name} - ${user.role === "admin" ? "مدير" : "سائق"}`;
   document.body.dataset.role = user.role;
   activeDriverId = user.role === "driver" ? user.id : drivers()[0]?.id || "";
-  setView(user.role === "driver" ? "driver" : "submit");
+  setView(user.role === "driver" ? "driver" : "dashboard");
   startRefresh();
 }
 
@@ -611,12 +736,12 @@ function startRefresh() {
   stopRefresh();
   refreshTimer = setInterval(async () => {
     try {
-      await loadState();
-      render();
+      const changed = await loadState();
+      if (changed) render();
     } catch {
       // Preview stays usable even without the server.
     }
-  }, 7000);
+  }, REFRESH_MS);
 }
 
 function stopRefresh() {
@@ -624,17 +749,34 @@ function stopRefresh() {
   refreshTimer = null;
 }
 
+function navigateView(view) {
+  const user = currentUser();
+  if (!user) return;
+  const targetView = user.role === "driver" ? "driver" : view;
+  if (targetView === currentView || document.body.classList.contains("is-view-loading")) return;
+  document.body.dataset.transitionLabel = "جاري فتح الصفحة";
+  document.body.classList.add("is-view-loading");
+  clearTimeout(viewTransitionTimer);
+  viewTransitionTimer = setTimeout(() => {
+    setView(targetView);
+    updateScrollTopButton();
+    setTimeout(() => document.body.classList.remove("is-view-loading"), 120);
+  }, 480);
+}
+
 function setView(view) {
   const user = currentUser();
   if (!user) return;
   if (user.role === "driver") view = "driver";
   currentView = view;
+  document.body.dataset.view = view;
   document.querySelectorAll(".nav-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   const sectionView = view === "zidOrders" ? "orders" : view;
   document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active-view", section.id === `${sectionView}View`));
-  els.searchInput.parentElement.classList.toggle("hidden", ["submit", "addDriver", "accounts", "requests"].includes(view));
-  els.viewTitle.textContent = { submit: "إضافة طلب", orders: "لوحة الطلبات", driver: "السائق", accounts: "الحسابات", requests: "المراجعة" }[view];
+  els.searchInput.parentElement.classList.toggle("hidden", ["dashboard", "submit", "addDriver", "accounts", "requests"].includes(view));
+  els.viewTitle.textContent = { dashboard: "Dashboard", submit: "إضافة طلب", orders: "لوحة الطلبات", driver: "السائق", accounts: "الحسابات", requests: "المراجعة" }[view];
   els.viewTitle.textContent = {
+    dashboard: "Dashboard",
     submit: "إضافة طلب",
     orders: "عرض الطلبات",
     driver: "تتبع السائقين",
@@ -644,6 +786,7 @@ function setView(view) {
   }[view] || els.viewTitle.textContent;
   if (view === "zidOrders") els.viewTitle.textContent = "طلبات زد";
   render();
+  updateScrollTopButton();
 }
 
 function render() {
@@ -651,6 +794,7 @@ function render() {
   if (!user) return;
   ensureDriverSelection();
   renderDriverOptions();
+  renderDashboard();
   renderFilters();
   renderCounts();
   renderOrdersBoard();
@@ -715,6 +859,217 @@ function getStats(orders) {
     accepted: orders.filter((order) => order.status === "accepted").length,
     late: orders.filter((order) => order.status === "late").length
   };
+}
+
+function renderDashboard() {
+  if (!els.dashboardStats || currentUser().role !== "admin") return;
+  renderDashboardStats();
+  renderOpsQueue();
+  renderDriverScorecards();
+  renderNeighborhoodStats();
+  renderDailyClosing();
+  renderPaymentDriverOptions();
+  renderPaymentList();
+}
+
+function renderDashboardStats() {
+  const orders = state.orders || [];
+  const open = orders.filter((order) => !isClosed(order));
+  const unassigned = open.filter((order) => !order.driverId);
+  const ready = open.filter((order) => order.status === "ready");
+  const pickedUp = open.filter((order) => ["picked_up", "late", "delayed"].includes(order.status));
+  const pendingReviews = pendingRequests().length;
+  const totalEarned = orders.reduce((total, order) => total + getPay(order), 0);
+  const totalPaid = payments().reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  const cards = [
+    { label: "مفتوحة الآن", value: open.length, hint: `${ready.length} جاهزة و ${pickedUp.length} مع السائقين`, tone: "blue" },
+    { label: "غير مسندة", value: unassigned.length, hint: "تحتاج توزيع على السائقين", tone: unassigned.length ? "warning" : "success" },
+    { label: "متأخرة", value: orders.filter((order) => order.status === "late").length, hint: "تحتاج متابعة أو قبول تأجيل", tone: "danger" },
+    { label: "مراجعات السائقين", value: pendingReviews, hint: "تأجيلات واعتراضات بانتظار القرار", tone: pendingReviews ? "warning" : "success" },
+    { label: "تم تسليمها اليوم", value: orders.filter((order) => isSameDay(order.completedAt || order.updatedAt, new Date()) && ["delivered", "completed"].includes(order.status)).length, hint: "نتيجة اليوم الحالية", tone: "success" },
+    { label: "الصافي المتبقي", value: formatMoney(totalEarned - totalPaid), hint: `${formatMoney(totalPaid)} مدفوعة للسائقين`, tone: totalEarned - totalPaid > 0 ? "warning" : "success" }
+  ];
+  els.dashboardStats.innerHTML = cards
+    .map(
+      (card, index) => `
+        <article class="dashboard-stat stat-${card.tone}" style="--delay:${index * 45}ms">
+          <span>${escapeHtml(card.label)}</span>
+          <strong>${escapeHtml(card.value)}</strong>
+          <small>${escapeHtml(card.hint)}</small>
+        </article>
+      `
+    )
+    .join("");
+}
+
+function renderOpsQueue() {
+  const now = new Date();
+  const items = [];
+  pendingRequests().forEach(({ order, request }) => {
+    items.push({
+      tone: "warning",
+      title: "طلب مراجعة من السائق",
+      meta: `${order.number} - ${order.customer} - ${request.reason || "بدون سبب"}`
+    });
+  });
+  state.orders
+    .filter((order) => order.status === "late")
+    .forEach((order) => {
+      items.push({ tone: "danger", title: "طلب متأخر", meta: `${order.number} - ${order.customer} - ${driverName(order.driverId)} - ${deadlineText(order.deadlineAt)}` });
+    });
+  state.orders
+    .filter((order) => ["picked_up", "accepted"].includes(order.status) && order.deadlineAt)
+    .filter((order) => new Date(order.deadlineAt).getTime() - now.getTime() <= 4 * 60 * 60 * 1000)
+    .forEach((order) => {
+      items.push({ tone: "blue", title: "موعد قريب", meta: `${order.number} - باقي ${timeRemaining(order.deadlineAt)}` });
+    });
+  state.orders
+    .filter((order) => !isClosed(order) && !order.driverId)
+    .forEach((order) => {
+      items.push({ tone: "warning", title: "طلب بلا سائق", meta: `${order.number} - ${order.area} - ${order.customer}` });
+    });
+  state.orders
+    .filter((order) => order.status === "ready" && !order.shippingPolicy)
+    .forEach((order) => {
+      items.push({ tone: "success", title: "جاهز بدون بوليصة", meta: `${order.number} - اطبع البوليصة قبل التسليم` });
+    });
+
+  els.opsQueue.innerHTML = items.length
+    ? items.slice(0, 9).map((item) => renderInsightItem(item)).join("")
+    : getEmptyState("العمليات هادئة", "لا توجد طلبات حرجة أو مراجعات تحتاج قرار الآن.");
+}
+
+function renderDriverScorecards() {
+  const driverCards = drivers().map((driver, index) => {
+    const metrics = driverMetrics(driver.id);
+    return `
+      <article class="scorecard" style="--delay:${index * 55}ms">
+        <div class="scorecard-top">
+          <div>
+            <strong>${escapeHtml(driver.name)}</strong>
+            <span>${metrics.active} نشط الآن</span>
+          </div>
+          <button class="ghost-button" data-driver-dashboard="${driver.id}" type="button">فتح اللوحة</button>
+        </div>
+        <div class="scorecard-money">
+          <div><span>المستحق</span><strong>${formatMoney(metrics.earned)}</strong></div>
+          <div><span>المدفوع</span><strong>${formatMoney(metrics.paid)}</strong></div>
+          <div><span>المتبقي</span><strong>${formatMoney(metrics.balance)}</strong></div>
+        </div>
+        <div class="scorecard-bars">
+          <span style="--bar:${metrics.onTime}%"><b>الالتزام</b><em>${metrics.onTime}%</em></span>
+          <span style="--bar:${metrics.closeRate}%"><b>الإغلاق</b><em>${metrics.closeRate}%</em></span>
+        </div>
+        <div class="scorecard-foot">
+          <span>${metrics.deliveredToday} تسليم اليوم</span>
+          <span>${metrics.late} متأخر</span>
+          <span>${metrics.avgDelivery}</span>
+        </div>
+      </article>
+    `;
+  });
+  els.driverScorecards.innerHTML = driverCards.length ? driverCards.join("") : getEmptyState("لا يوجد سائقون", "أضف السائقين من صفحة إضافة سائق.");
+  els.driverScorecards.querySelectorAll("[data-driver-dashboard]").forEach((button) => {
+    button.addEventListener("click", () => {
+      activeDriverId = button.dataset.driverDashboard;
+      setView("driver");
+    });
+  });
+}
+
+function renderNeighborhoodStats() {
+  const grouped = new Map();
+  state.orders.forEach((order) => {
+    if (order.status === "cancelled") return;
+    const area = order.area || "غير محدد";
+    const record = grouped.get(area) || { area, total: 0, active: 0, delivered: 0, late: 0, drivers: new Map() };
+    record.total += 1;
+    if (!isClosed(order)) record.active += 1;
+    if (["delivered", "completed"].includes(order.status)) record.delivered += 1;
+    if (order.status === "late") record.late += 1;
+    if (order.driverId) record.drivers.set(order.driverId, (record.drivers.get(order.driverId) || 0) + 1);
+    grouped.set(area, record);
+  });
+  const rows = [...grouped.values()].sort((a, b) => b.active - a.active || b.total - a.total).slice(0, 8);
+  els.neighborhoodStats.innerHTML = rows.length
+    ? rows
+        .map((record) => {
+          const topDriver = [...record.drivers.entries()].sort((a, b) => b[1] - a[1])[0];
+          return `
+            <article class="neighborhood-row">
+              <div>
+                <strong>${escapeHtml(record.area)}</strong>
+                <span>${topDriver ? `الأكثر: ${escapeHtml(driverName(topDriver[0]))}` : "لم يتم تعيين سائق"}</span>
+              </div>
+              <div class="mini-metrics">
+                <span>${record.active} نشط</span>
+                <span>${record.delivered} مكتمل</span>
+                <span>${record.late} متأخر</span>
+              </div>
+            </article>
+          `;
+        })
+        .join("")
+    : getEmptyState("لا توجد أحياء", "ستظهر المناطق هنا عند إضافة أو مزامنة الطلبات.");
+}
+
+function renderDailyClosing() {
+  const today = new Date();
+  const orders = state.orders || [];
+  const importedToday = orders.filter((order) => isZidOrder(order) && isSameDay(order.orderCreatedAt || order.createdAt, today)).length;
+  const manualToday = orders.filter((order) => !isZidOrder(order) && isSameDay(order.orderCreatedAt || order.createdAt, today)).length;
+  const paidToday = payments().filter((payment) => isSameDay(payment.paidAt, today)).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const rows = [
+    ["طلبات زد اليوم", importedToday],
+    ["طلبات يدوية اليوم", manualToday],
+    ["جاهزة للاستلام", orders.filter((order) => order.status === "ready").length],
+    ["مع السائقين", orders.filter((order) => ["picked_up", "late", "delayed"].includes(order.status)).length],
+    ["بوالص مطبوعة", orders.filter((order) => order.shippingPolicy).length],
+    ["مدفوع اليوم", formatMoney(paidToday)]
+  ];
+  els.dailyClosing.innerHTML = rows.map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join("");
+}
+
+function renderPaymentDriverOptions() {
+  if (!els.paymentDriver) return;
+  const selected = els.paymentDriver.value || activeDriverId;
+  els.paymentDriver.innerHTML = drivers().map((driver) => `<option value="${driver.id}">${escapeHtml(driver.name)}</option>`).join("");
+  els.paymentDriver.value = [...els.paymentDriver.options].some((option) => option.value === selected) ? selected : drivers()[0]?.id || "";
+  setDefaultPaymentDate();
+}
+
+function renderPaymentList() {
+  if (!els.paymentList) return;
+  const rows = payments().slice(0, 12);
+  els.paymentList.innerHTML = rows.length
+    ? rows
+        .map((payment) => {
+          const driver = state.users.find((user) => user.id === payment.driverId);
+          return `
+            <article class="payment-row">
+              <div>
+                <strong>${escapeHtml(formatMoney(payment.amount))}</strong>
+                <span>${escapeHtml(driver?.name || "سائق غير معروف")} - ${escapeHtml(formatDateTime(payment.paidAt))}</span>
+                ${payment.note ? `<small>${escapeHtml(payment.note)}</small>` : ""}
+              </div>
+              <a class="proof-link" href="${escapeAttribute(payment.proof)}" target="_blank" rel="noreferrer">فتح الإثبات</a>
+            </article>
+          `;
+        })
+        .join("")
+    : getEmptyState("لا توجد دفعات", "ارفع إثبات الدفع عند تسديد مستحقات أي سائق.");
+}
+
+function renderInsightItem(item) {
+  return `
+    <article class="insight-item insight-${item.tone}">
+      <span></span>
+      <div>
+        <strong>${escapeHtml(item.title)}</strong>
+        <small>${escapeHtml(item.meta)}</small>
+      </div>
+    </article>
+  `;
 }
 
 function renderStats(root, orders) {
@@ -785,13 +1140,49 @@ function renderDriverQueue() {
   let orders = baseOrders;
   if (category !== "all") orders = orders.filter((order) => getFlowType(order) === category);
   if (status !== "all") orders = orders.filter((order) => order.status === status);
-  const owed = orders.reduce((total, order) => total + getPay(order), 0);
+  const allDriverOrders = state.orders.filter((order) => order.driverId === activeDriverId);
+  const earned = allDriverOrders.reduce((total, order) => total + getPay(order), 0);
+  const paid = payments().filter((payment) => payment.driverId === activeDriverId).reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  const owed = earned - paid;
   els.driverNameHeading.textContent = driver ? `لوحة ${driver.name}` : "لم يتم اختيار سائق";
-  els.driverRouteSummary.textContent = orders.length ? `${orders.length} طلبات مسندة. طلبات العملاء 30 ريال، وتصبح 20 ريال عند التأخير.` : "لا توجد طلبات مسندة.";
-  els.driverOwed.textContent = `${owed} ريال`;
+  els.driverRouteSummary.textContent = orders.length ? `${orders.length} طلبات في الفلتر الحالي. المستحق قبل الدفعات ${formatMoney(earned)}، والمدفوع ${formatMoney(paid)}.` : `لا توجد طلبات في الفلتر الحالي. المدفوع ${formatMoney(paid)} والمتبقي ${formatMoney(owed)}.`;
+  els.driverOwed.textContent = formatMoney(owed);
   renderStats(els.driverStats, baseOrders);
-  els.driverOrders.innerHTML = orders.length ? orders.map((order) => renderOrderCard(order, "driver")).join("") : getEmptyState("لا توجد طلبات", "ستظهر الطلبات المسندة هنا.");
+  els.driverOrders.innerHTML = `${renderDriverPaymentNotice(activeDriverId, earned, paid, owed)}${orders.length ? orders.map((order) => renderOrderCard(order, "driver")).join("") : getEmptyState("لا توجد طلبات", "ستظهر الطلبات المسندة هنا.")}`;
   wireOrderControls(els.driverOrders);
+}
+
+function renderDriverPaymentNotice(driverId, earned, paid, owed) {
+  const driverPayments = payments().filter((payment) => payment.driverId === driverId).slice(0, 5);
+  return `
+    <section class="driver-payment-panel">
+      <div class="driver-payment-totals">
+        <div><span>المستحق قبل الدفع</span><strong>${formatMoney(earned)}</strong></div>
+        <div><span>المدفوع</span><strong>${formatMoney(paid)}</strong></div>
+        <div><span>المتبقي</span><strong>${formatMoney(owed)}</strong></div>
+      </div>
+      <div class="payment-list compact">
+        ${
+          driverPayments.length
+            ? driverPayments
+                .map(
+                  (payment) => `
+                    <article class="payment-row">
+                      <div>
+                        <strong>${escapeHtml(formatMoney(payment.amount))}</strong>
+                        <span>${escapeHtml(formatDateTime(payment.paidAt))}</span>
+                        ${payment.note ? `<small>${escapeHtml(payment.note)}</small>` : ""}
+                      </div>
+                      <a class="proof-link" href="${escapeAttribute(payment.proof)}" target="_blank" rel="noreferrer">إثبات الدفع</a>
+                    </article>
+                  `
+                )
+                .join("")
+            : `<div class="empty-state compact-empty"><div><strong>لا توجد دفعات مسجلة</strong><br /><span>عند رفع إثبات دفع من الإدارة سيظهر هنا.</span></div></div>`
+        }
+      </div>
+    </section>
+  `;
 }
 
 function renderAccountList() {
@@ -799,13 +1190,13 @@ function renderAccountList() {
     ? state.users
         .map((user) => {
           const active = user.role === "driver" ? state.orders.filter((order) => order.driverId === user.id && !["completed", "delivered", "cancelled"].includes(order.status)).length : 0;
-          const owed = user.role === "driver" ? state.orders.filter((order) => order.driverId === user.id).reduce((total, order) => total + getPay(order), 0) : 0;
+          const metrics = user.role === "driver" ? driverMetrics(user.id) : null;
           return `
             <article class="driver-card">
               <div>
                 <strong>${escapeHtml(user.name)} (${user.role === "admin" ? "مدير" : "سائق"})</strong>
                 <div class="order-details">الدخول: ${escapeHtml(user.username)} / ${escapeHtml(user.password)}</div>
-                ${user.role === "driver" ? `<div class="order-details">${active} نشط | ${owed} ريال مستحق</div>` : ""}
+                ${user.role === "driver" ? `<div class="order-details">${active} نشط | مدفوع ${formatMoney(metrics.paid)} | متبقي ${formatMoney(metrics.balance)}</div>` : ""}
               </div>
             </article>
           `;
@@ -1005,6 +1396,13 @@ function fileToDataUrl(file) {
   });
 }
 
+async function fileToProofDataUrl(file) {
+  const maxFileSize = 5 * 1024 * 1024;
+  if (file.size > maxFileSize) throw new Error("حجم إثبات الدفع كبير. ارفع ملف أقل من 5MB.");
+  if (file.type.startsWith("image/")) return imageFileToCompressedDataUrl(file);
+  return fileToDataUrl(file);
+}
+
 function imageFileToCompressedDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1032,7 +1430,7 @@ function imageFileToCompressedDataUrl(file) {
 
 async function createPolicy(id) {
   try {
-    state = await api(`/api/orders/${encodeURIComponent(id)}/policy`, { method: "POST" });
+    applyState(await api(`/api/orders/${encodeURIComponent(id)}/policy`, { method: "POST" }));
     render();
     setTimeout(() => printPolicy(id), 150);
   } catch (error) {
@@ -1043,7 +1441,7 @@ async function createPolicy(id) {
 async function deletePolicy(id) {
   if (!confirm("حذف البوليصة الحالية؟ الرقم لن يستخدم مرة ثانية.")) return;
   try {
-    state = await api(`/api/orders/${encodeURIComponent(id)}/policy`, { method: "DELETE" });
+    applyState(await api(`/api/orders/${encodeURIComponent(id)}/policy`, { method: "DELETE" }));
     render();
   } catch (error) {
     alert(error.message);
@@ -1079,6 +1477,113 @@ function getPay(order) {
   if (order.cutRemoved) return CUSTOMER_PAY;
   if (order.status === "late" || (order.status === "delivered" && isLate(order))) return LATE_PAY;
   return CUSTOMER_PAY;
+}
+
+function payments() {
+  return Array.isArray(state.payments) ? state.payments : [];
+}
+
+function isClosed(order) {
+  return ["completed", "delivered", "cancelled"].includes(order.status);
+}
+
+function pendingRequests() {
+  const requests = [];
+  state.orders.forEach((order) => {
+    [...(order.delayRequests || []), ...(order.appeals || [])].forEach((request) => {
+      if (request.status === "pending") requests.push({ order, request });
+    });
+  });
+  return requests;
+}
+
+function driverName(driverId) {
+  return state.users.find((user) => user.id === driverId)?.name || "غير مسند";
+}
+
+function driverMetrics(driverId) {
+  const orders = state.orders.filter((order) => order.driverId === driverId);
+  const delivered = orders.filter((order) => ["delivered", "completed"].includes(order.status));
+  const active = orders.filter((order) => !isClosed(order)).length;
+  const lateActive = orders.filter((order) => order.status === "late");
+  const lateDelivered = delivered.filter((order) => isLate(order));
+  const earned = orders.reduce((total, order) => total + getPay(order), 0);
+  const paid = payments().filter((payment) => payment.driverId === driverId).reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  const deliveryDurations = delivered
+    .map((order) => {
+      const start = safeDate(order.pickedUpAt || order.acceptedAt);
+      const end = safeDate(order.completedAt || order.updatedAt);
+      return start && end ? end.getTime() - start.getTime() : 0;
+    })
+    .filter((duration) => duration > 0);
+  const onTime = delivered.length ? Math.round(((delivered.length - lateDelivered.length) / delivered.length) * 100) : 100;
+  const closeRate = orders.length ? Math.round((delivered.length / orders.length) * 100) : 0;
+  return {
+    active,
+    earned,
+    paid,
+    balance: earned - paid,
+    late: lateActive.length + lateDelivered.length,
+    deliveredToday: delivered.filter((order) => isSameDay(order.completedAt || order.updatedAt, new Date())).length,
+    onTime: clampPercent(onTime),
+    closeRate: clampPercent(closeRate),
+    avgDelivery: deliveryDurations.length ? formatDuration(average(deliveryDurations)) : "لا يوجد متوسط"
+  };
+}
+
+function formatMoney(value) {
+  const amount = Number(value || 0);
+  return `${amount.toLocaleString("ar-SA", { maximumFractionDigits: amount % 1 ? 2 : 0 })} ريال`;
+}
+
+function safeDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isSameDay(value, day) {
+  const date = safeDate(value);
+  if (!date) return false;
+  return date.getFullYear() === day.getFullYear() && date.getMonth() === day.getMonth() && date.getDate() === day.getDate();
+}
+
+function average(values) {
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function formatDuration(ms) {
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  const minutes = Math.round((ms % (60 * 60 * 1000)) / (60 * 1000));
+  if (hours <= 0) return `${minutes} دقيقة`;
+  return `${hours} ساعة ${minutes ? `${minutes} دقيقة` : ""}`.trim();
+}
+
+function deadlineText(value) {
+  return value ? `الموعد ${formatDeadline(value)}` : "لا يوجد موعد";
+}
+
+function timeRemaining(value) {
+  const date = safeDate(value);
+  if (!date) return "غير محدد";
+  const diff = date.getTime() - Date.now();
+  if (diff <= 0) return "انتهى الوقت";
+  return formatDuration(diff);
+}
+
+function setDefaultPaymentDate() {
+  if (!els.paymentPaidAt || els.paymentPaidAt.value) return;
+  els.paymentPaidAt.value = toDatetimeLocalValue(new Date());
+}
+
+function toDatetimeLocalValue(value) {
+  const date = safeDate(value) || new Date();
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
+  return local.toISOString().slice(0, 16);
 }
 
 function whatsappLink(phone) {
@@ -1119,8 +1624,43 @@ function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
 
+function setupAmbientPointer() {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  document.addEventListener("pointermove", (event) => {
+    if (ambientPointerFrame) cancelAnimationFrame(ambientPointerFrame);
+    ambientPointerFrame = requestAnimationFrame(() => {
+      document.documentElement.style.setProperty("--cursor-x", `${event.clientX}px`);
+      document.documentElement.style.setProperty("--cursor-y", `${event.clientY}px`);
+    });
+  }, { passive: true });
+}
+
+function updateScrollTopButton() {
+  if (!els.scrollTopBtn) return;
+  const root = document.documentElement;
+  const scrollable = Math.max(0, root.scrollHeight - window.innerHeight);
+  const halfway = scrollable * 0.5;
+  const shouldShow = window.scrollY > halfway && scrollable > window.innerHeight * 0.8;
+  els.scrollTopBtn.classList.toggle("is-visible", shouldShow);
+}
+
+function setupScrollTopButton() {
+  updateScrollTopButton();
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (scrollTopFrame) cancelAnimationFrame(scrollTopFrame);
+      scrollTopFrame = requestAnimationFrame(updateScrollTopButton);
+    },
+    { passive: true }
+  );
+  window.addEventListener("resize", updateScrollTopButton);
+}
+
 if ("serviceWorker" in navigator && !IS_FILE_MODE) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 
+setupAmbientPointer();
+setupScrollTopButton();
 bootApp();
