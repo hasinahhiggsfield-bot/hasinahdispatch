@@ -1,0 +1,16 @@
+{
+  "name": "hasinah-dispatch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Internal Jeddah return and replacement dispatch app for Hasinah.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
