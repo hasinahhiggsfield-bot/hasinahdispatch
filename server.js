@@ -41,7 +41,8 @@ function uid(prefix) {
 function seedState() {
   return {
     users: [{ id: uid("usr"), role: "admin", name: "يحيى", username: "yahya", password: "123123", phone: "" }],
-    orders: []
+    orders: [],
+    payments: []
   };
 }
 
@@ -152,7 +153,7 @@ function readBody(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 6 * 1024 * 1024) {
+      if (body.length > 10 * 1024 * 1024) {
         reject(new Error("Request body is too large."));
         req.destroy();
       }
@@ -177,8 +178,9 @@ function publicUser(user) {
 }
 
 function publicState(state) {
+  state.payments = Array.isArray(state.payments) ? state.payments : [];
   markLateOrders(state);
-  return { users: state.users.map((user) => ({ ...user })), orders: state.orders };
+  return { users: state.users.map((user) => ({ ...user })), orders: state.orders, payments: state.payments };
 }
 
 function normalizePhone(phone) {
@@ -677,6 +679,7 @@ function createOrder(state, body) {
     zidStatusName: String(body.zidStatusName || "").trim(),
     zid: body.zid && typeof body.zid === "object" ? body.zid : undefined,
     driverId: String(body.driverId || "").trim(),
+    assignedAt: body.driverId ? now.toISOString() : "",
     customAmount: kind === "custom" ? customAmount : 0,
     timerHours: kind === "custom" ? Math.max(1, timerHours || 24) : 24,
     requestDate: body.requestDate ? new Date(body.requestDate).toISOString() : now.toISOString(),
@@ -693,13 +696,38 @@ function createOrder(state, body) {
   });
 }
 
+function createPayment(state, body) {
+  state.payments = Array.isArray(state.payments) ? state.payments : [];
+  const driverId = String(body.driverId || "").trim();
+  const amount = Number(body.amount || 0);
+  const paidAt = body.paidAt ? new Date(body.paidAt) : new Date();
+  const driver = state.users.find((user) => user.id === driverId && user.role === "driver");
+  if (!driver) throw new Error("اختر السائق قبل تسجيل الدفعة.");
+  if (!amount || amount <= 0) throw new Error("اكتب مبلغ دفع صحيح.");
+  if (Number.isNaN(paidAt.getTime())) throw new Error("تاريخ الدفع غير صحيح.");
+  if (!body.proof) throw new Error("إثبات الدفع مطلوب.");
+  state.payments.unshift({
+    id: uid("pay"),
+    driverId,
+    amount,
+    paidAt: paidAt.toISOString(),
+    proof: String(body.proof || ""),
+    proofName: String(body.proofName || "payment-proof"),
+    note: String(body.note || "").trim(),
+    createdAt: new Date().toISOString()
+  });
+}
+
 function updateOrderState(state, id, patch) {
   const order = state.orders.find((item) => item.id === id);
   if (!order) throw new Error("لم يتم العثور على الطلب.");
   const now = new Date();
+  const previousDriverId = order.driverId || "";
 
   if (Object.prototype.hasOwnProperty.call(patch, "driverId")) {
     order.driverId = String(patch.driverId || "");
+    if (!previousDriverId && order.driverId) order.assignedAt = now.toISOString();
+    if (!order.driverId) order.assignedAt = "";
     if (order.kind === "custom" && order.driverId && order.status !== "completed") order.status = "pending_acceptance";
     if (order.kind === "customer" && order.driverId && ["new", "pending_acceptance", "accepted"].includes(order.status)) order.status = "ready";
     if (!order.driverId && !["completed", "delivered"].includes(order.status)) {
@@ -791,6 +819,7 @@ function assignNeighborhood(state, body) {
   state.orders.forEach((order) => {
     if (normalizeText(order.area) === area && !order.driverId && ["new", "pending_acceptance"].includes(order.status)) {
       order.driverId = driverId;
+      order.assignedAt = now.toISOString();
       order.status = "ready";
       order.acceptedAt = "";
       order.deadlineAt = "";
@@ -934,6 +963,13 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === "/api/orders" && req.method === "POST") {
     createOrder(state, await readBody(req));
+    await writeState(state);
+    send(res, 201, publicState(state));
+    return true;
+  }
+
+  if (url.pathname === "/api/payments" && req.method === "POST") {
+    createPayment(state, await readBody(req));
     await writeState(state);
     send(res, 201, publicState(state));
     return true;
