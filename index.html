@@ -9,9 +9,57 @@
     <title>حسينة | ديسباتش السائقين</title>
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="assets/hasinah-icon.svg" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=mobile-scrolltop-1" />
   </head>
   <body>
+    <svg class="icon-sprite" aria-hidden="true" focusable="false">
+      <symbol id="icon-dashboard" viewBox="0 0 24 24">
+        <path d="M4.5 11.2V5.8a1.3 1.3 0 0 1 1.3-1.3h4.4v6.7H4.5Z" />
+        <path d="M13.8 4.5h4.4a1.3 1.3 0 0 1 1.3 1.3v3.4h-5.7V4.5Z" />
+        <path d="M4.5 14.8h5.7v4.7H5.8a1.3 1.3 0 0 1-1.3-1.3v-3.4Z" />
+        <path d="M13.8 12.8h5.7v5.4a1.3 1.3 0 0 1-1.3 1.3h-4.4v-6.7Z" />
+      </symbol>
+      <symbol id="icon-submit" viewBox="0 0 24 24">
+        <path d="M7 7.5h10l1.2 3.4v7.6a1.5 1.5 0 0 1-1.5 1.5H7.3a1.5 1.5 0 0 1-1.5-1.5v-7.6L7 7.5Z" />
+        <path d="M8.2 7.5 9.2 4h5.6l1 3.5" />
+        <path d="M12 10.8v5.2" />
+        <path d="M9.4 13.4h5.2" />
+      </symbol>
+      <symbol id="icon-orders" viewBox="0 0 24 24">
+        <path d="M8.2 4.5h7.6a2 2 0 0 1 2 2v12.8a1.2 1.2 0 0 1-1.8 1l-1.2-.7-1.4.8-1.4-.8-1.4.8-1.4-.8-1.2.7a1.2 1.2 0 0 1-1.8-1V6.5a2 2 0 0 1 2-2Z" />
+        <path d="M9.2 9h5.6" />
+        <path d="M9.2 12.2h5.6" />
+        <path d="M9.2 15.4h3.4" />
+      </symbol>
+      <symbol id="icon-zid" viewBox="0 0 24 24">
+        <path d="M5 8.2h14l-1 9.3a2 2 0 0 1-2 1.8H8a2 2 0 0 1-2-1.8L5 8.2Z" />
+        <path d="M8.3 8.2a3.7 3.7 0 0 1 7.4 0" />
+        <path d="M9 14.8h6l-5.5-4.2H15" />
+      </symbol>
+      <symbol id="icon-route" viewBox="0 0 24 24">
+        <path d="M7.2 6.6a2.6 2.6 0 1 0 0 .1Z" />
+        <path d="M16.8 17.3a2.6 2.6 0 1 0 0 .1Z" />
+        <path d="M8.8 8.4h4.8a2.6 2.6 0 0 1 0 5.2H10a2.6 2.6 0 0 0 0 5.2h4.1" />
+      </symbol>
+      <symbol id="icon-driver-add" viewBox="0 0 24 24">
+        <path d="M9.7 11.1a3.6 3.6 0 1 0 0-7.2 3.6 3.6 0 0 0 0 7.2Z" />
+        <path d="M3.8 19.8a6.1 6.1 0 0 1 11.8 0" />
+        <path d="M17.8 8.3v6" />
+        <path d="M14.8 11.3h6" />
+      </symbol>
+      <symbol id="icon-accounts" viewBox="0 0 24 24">
+        <path d="M12 3.8 18.6 6v5.5c0 4.2-2.7 7.3-6.6 8.7-3.9-1.4-6.6-4.5-6.6-8.7V6L12 3.8Z" />
+        <path d="M9.2 12.2 11 14l3.9-4.1" />
+      </symbol>
+      <symbol id="icon-review" viewBox="0 0 24 24">
+        <path d="M12 20.2a8.2 8.2 0 1 0 0-16.4 8.2 8.2 0 0 0 0 16.4Z" />
+        <path d="M12 7.2v5.1" />
+        <path d="M12 16.4h.01" />
+      </symbol>
+      <symbol id="icon-up" viewBox="0 0 24 24">
+        <path d="m6.5 14.5 5.5-5.5 5.5 5.5" />
+      </symbol>
+    </svg>
     <section id="loginScreen" class="login-screen">
       <form id="loginForm" class="login-panel simple-login">
         <div class="brand-mark" aria-hidden="true">H</div>
@@ -34,13 +82,14 @@
         </div>
 
         <nav class="nav-tabs" aria-label="التنقل الرئيسي">
-          <button class="nav-tab admin-only active" data-view="submit" type="button">إضافة طلب</button>
-          <button class="nav-tab admin-only" data-view="orders" type="button">عرض الطلبات</button>
-          <button class="nav-tab admin-only" data-view="zidOrders" type="button">طلبات زد</button>
-          <button class="nav-tab active" data-view="driver" type="button">تتبع السائقين</button>
-          <button class="nav-tab admin-only" data-view="addDriver" type="button">إضافة سائق</button>
-          <button class="nav-tab admin-only" data-view="accounts" type="button">الحسابات</button>
-          <button class="nav-tab admin-only" data-view="requests" type="button">المراجعة</button>
+          <button class="nav-tab admin-only active" data-view="dashboard" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-dashboard"></use></svg><span>Dashboard</span></button>
+          <button class="nav-tab admin-only" data-view="submit" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-submit"></use></svg><span>إضافة طلب</span></button>
+          <button class="nav-tab admin-only" data-view="orders" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-orders"></use></svg><span>عرض الطلبات</span></button>
+          <button class="nav-tab admin-only" data-view="zidOrders" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-zid"></use></svg><span>طلبات زد</span></button>
+          <button class="nav-tab active" data-view="driver" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-route"></use></svg><span>تتبع السائقين</span></button>
+          <button class="nav-tab admin-only" data-view="addDriver" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-driver-add"></use></svg><span>إضافة سائق</span></button>
+          <button class="nav-tab admin-only" data-view="accounts" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-accounts"></use></svg><span>الحسابات</span></button>
+          <button class="nav-tab admin-only" data-view="requests" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-review"></use></svg><span>المراجعة</span></button>
         </nav>
 
         <section class="admin-only driver-picker">
@@ -71,7 +120,110 @@
           </div>
         </header>
 
-        <section id="submitView" class="view active-view">
+        <section id="dashboardView" class="view active-view">
+          <section class="dashboard-hero panel">
+            <div>
+              <p class="eyebrow">Dashboard</p>
+              <h3>لوحة الأداء اليومية</h3>
+              <p>مركز واحد لمتابعة الإنتاجية، الطلبات الحرجة، أداء السائقين، والأموال المدفوعة والمتبقية.</p>
+            </div>
+            <div class="dashboard-live-chip">
+              <span></span>
+              مباشر
+            </div>
+          </section>
+
+          <div id="dashboardStats" class="dashboard-stats" aria-label="ملخص الأداء"></div>
+
+          <div class="dashboard-grid">
+            <section class="panel dashboard-panel dashboard-panel-wide">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">العمليات الآن</p>
+                  <h3>الأولوية القادمة</h3>
+                </div>
+              </div>
+              <div id="opsQueue" class="insight-list"></div>
+            </section>
+
+            <section class="panel dashboard-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">إغلاق اليوم</p>
+                  <h3>نتيجة التشغيل</h3>
+                </div>
+              </div>
+              <div id="dailyClosing" class="closing-grid"></div>
+            </section>
+
+            <section class="panel dashboard-panel dashboard-panel-wide">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">السائقين</p>
+                  <h3>الإنتاجية والمستحقات</h3>
+                </div>
+              </div>
+              <div id="driverScorecards" class="scorecard-grid"></div>
+            </section>
+
+            <section class="panel dashboard-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">الأحياء</p>
+                  <h3>ضغط المناطق</h3>
+                </div>
+              </div>
+              <div id="neighborhoodStats" class="neighborhood-list"></div>
+            </section>
+
+            <section class="panel dashboard-panel dashboard-panel-payments">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">المدفوعات</p>
+                  <h3>تسجيل دفعة لسائق</h3>
+                </div>
+              </div>
+              <form id="paymentForm" class="payment-form">
+                <label>
+                  السائق
+                  <select id="paymentDriver" required></select>
+                </label>
+                <div class="two-col">
+                  <label>
+                    المبلغ
+                    <input id="paymentAmount" type="number" min="1" step="0.01" inputmode="decimal" placeholder="500" required />
+                  </label>
+                  <label>
+                    وقت الدفع
+                    <input id="paymentPaidAt" type="datetime-local" required />
+                  </label>
+                </div>
+                <label>
+                  إثبات الدفع
+                  <input id="paymentProof" type="file" accept="image/*,.pdf" required />
+                </label>
+                <img id="paymentProofPreview" class="proof-preview hidden" alt="معاينة إثبات الدفع" />
+                <label>
+                  ملاحظات
+                  <textarea id="paymentNote" rows="3" placeholder="مثال: حوالة بنكية أو كاش نهاية الشفت"></textarea>
+                </label>
+                <button class="primary-button" type="submit">تسجيل الدفعة</button>
+              </form>
+            </section>
+
+            <section class="panel dashboard-panel dashboard-panel-payments">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">سجل الدفع</p>
+                  <h3>آخر الإشعارات</h3>
+                </div>
+              </div>
+              <div id="paymentList" class="payment-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="submitView" class="view">
           <form id="orderForm" class="panel order-form submit-panel">
             <div class="panel-heading">
               <div>
@@ -194,7 +346,7 @@
             <p id="driverRouteSummary"></p>
             <div class="driver-money">
               <strong id="driverOwed">0 ريال</strong>
-              <span>المبلغ المستحق الحالي</span>
+              <span>المتبقي بعد الدفعات</span>
             </div>
           </section>
           <div id="driverStats" class="order-stats driver-stats" aria-label="إحصائيات السائق"></div>
@@ -301,6 +453,10 @@
       </form>
     </section>
 
-    <script src="app.js?v=zid-orders-ready-1"></script>
+    <button id="scrollTopBtn" class="scroll-top-button" type="button" aria-label="العودة للأعلى">
+      <svg aria-hidden="true"><use href="#icon-up"></use></svg>
+    </button>
+
+    <script src="app.js?v=mobile-scrolltop-1"></script>
   </body>
 </html>
