@@ -19,6 +19,7 @@ let scannerStream = null;
 let scannerDetector = null;
 let scannerZxingReader = null;
 let scannerZxingControls = null;
+let scannerFallbackScript = null;
 let scannerFrame = null;
 let scannerActive = false;
 let scannerBusy = false;
@@ -1524,6 +1525,7 @@ function closeScanner() {
 }
 
 async function startZxingScanner() {
+  if (!(await ensureZxingScanner())) return false;
   const zxing = window.ZXingBrowser;
   if (!zxing?.BrowserMultiFormatOneDReader) return false;
   try {
@@ -1533,11 +1535,21 @@ async function startZxingScanner() {
     });
     scannerActive = true;
     setScannerStatus("الكاميرا تعمل. ركز الباركود الخطي داخل الإطار.", "info");
-    scannerZxingControls = await scannerZxingReader.decodeFromVideoElement(els.scannerVideo, (result) => {
+    const handleResult = (result) => {
       if (!scannerActive || !result || Date.now() < scannerCooldownUntil) return;
       const value = typeof result.getText === "function" ? result.getText() : String(result.text || "");
       if (value) handleScannedCode(value, "camera");
-    });
+    };
+    scannerZxingControls = scannerStream
+      ? await scannerZxingReader.decodeFromStream(scannerStream, els.scannerVideo, handleResult)
+      : await scannerZxingReader.decodeFromConstraints({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        }, els.scannerVideo, handleResult);
     return true;
   } catch (error) {
     console.warn("ZXing scanner failed", error);
@@ -1545,6 +1557,21 @@ async function startZxingScanner() {
     scannerZxingReader = null;
     return false;
   }
+}
+
+function ensureZxingScanner() {
+  if (window.ZXingBrowser?.BrowserMultiFormatOneDReader) return Promise.resolve(true);
+  if (scannerFallbackScript) return scannerFallbackScript;
+  scannerFallbackScript = new Promise((resolve) => {
+    const script = document.createElement("script");
+    script.src = "assets/vendor-zxing-browser.min.js?v=0.1.5";
+    script.async = true;
+    script.dataset.scannerFallback = "true";
+    script.onload = () => resolve(Boolean(window.ZXingBrowser?.BrowserMultiFormatOneDReader));
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+  return scannerFallbackScript;
 }
 
 async function scannerLoop() {
