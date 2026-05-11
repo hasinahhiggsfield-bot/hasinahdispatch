@@ -15,6 +15,15 @@ let viewTransitionTimer = null;
 let ambientPointerFrame = null;
 let scrollTopFrame = null;
 let lastStateSignature = "";
+let scannerStream = null;
+let scannerDetector = null;
+let scannerZxingReader = null;
+let scannerZxingControls = null;
+let scannerFrame = null;
+let scannerActive = false;
+let scannerBusy = false;
+let scannerCooldownUntil = 0;
+let scannerProcessedCodes = new Set();
 
 const statusLabels = {
   new: "جديد",
@@ -34,7 +43,7 @@ const typeLabels = {
 };
 
 statusLabels.ready = "جاهز للاستلام";
-statusLabels.picked_up = "تم الاستلام";
+statusLabels.picked_up = "قيد التوصيل";
 statusLabels.delivered = "تم التوصيل";
 
 const els = {
@@ -84,6 +93,13 @@ const els = {
   paymentProofPreview: document.querySelector("#paymentProofPreview"),
   paymentNote: document.querySelector("#paymentNote"),
   paymentList: document.querySelector("#paymentList"),
+  openScannerBtn: document.querySelector("#openScannerBtn"),
+  scannerModal: document.querySelector("#scannerModal"),
+  scannerVideo: document.querySelector("#scannerVideo"),
+  scannerStatus: document.querySelector("#scannerStatus"),
+  scannerManualInput: document.querySelector("#scannerManualInput"),
+  scannerManualBtn: document.querySelector("#scannerManualBtn"),
+  closeScannerBtn: document.querySelector("#closeScannerBtn"),
   scrollTopBtn: document.querySelector("#scrollTopBtn"),
   searchInput: document.querySelector("#searchInput"),
   categoryFilter: document.querySelector("#categoryFilter"),
@@ -130,6 +146,7 @@ els.loginForm.addEventListener("submit", async (event) => {
 });
 
 els.logoutBtn.addEventListener("click", () => {
+  closeScanner();
   session = null;
   localStorage.removeItem(SESSION_KEY);
   stopRefresh();
@@ -233,15 +250,34 @@ els.scrollTopBtn?.addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
+els.openScannerBtn?.addEventListener("click", openScanner);
+els.closeScannerBtn?.addEventListener("click", closeScanner);
+els.scannerManualBtn?.addEventListener("click", () => handleScannedCode(els.scannerManualInput.value, "manual"));
+els.scannerManualInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    handleScannedCode(els.scannerManualInput.value, "manual");
+  }
+});
+
 els.activeDriverSelect.addEventListener("change", () => {
   activeDriverId = els.activeDriverSelect.value;
   render();
 });
 
 els.searchInput.addEventListener("input", render);
-els.categoryFilter.addEventListener("change", render);
-els.statusFilter.addEventListener("change", render);
-els.driverFilter.addEventListener("change", render);
+els.categoryFilter.addEventListener("change", () => {
+  updateFilterTone();
+  render();
+});
+els.statusFilter.addEventListener("change", () => {
+  updateFilterTone();
+  render();
+});
+els.driverFilter.addEventListener("change", () => {
+  updateFilterTone();
+  render();
+});
 
 els.resetDemoBtn.addEventListener("click", async () => {
   if (!confirm("مسح كل البيانات والإبقاء على حساب يحيى فقط؟")) return;
@@ -841,6 +877,34 @@ function renderFilters() {
   ].join("");
   els.driverFilter.innerHTML = driverOptionsHtml;
   els.driverFilter.value = [...els.driverFilter.options].some((option) => option.value === selectedDriver) ? selectedDriver : "all";
+  updateFilterTone();
+}
+
+function updateFilterTone() {
+  setSelectTone(els.statusFilter, statusTone(els.statusFilter.value));
+  setSelectTone(els.categoryFilter, categoryTone(els.categoryFilter.value));
+  setSelectTone(els.driverFilter, els.driverFilter.value && els.driverFilter.value !== "all" ? "driver" : "neutral");
+}
+
+function setSelectTone(select, tone) {
+  if (!select) return;
+  select.dataset.tone = tone || "neutral";
+}
+
+function statusTone(status) {
+  if (["late", "cancelled"].includes(status)) return "danger";
+  if (["delivered", "completed"].includes(status)) return "success";
+  if (["ready", "accepted", "picked_up"].includes(status)) return "blue";
+  if (["new", "pending_acceptance", "delayed"].includes(status)) return "warning";
+  return "neutral";
+}
+
+function categoryTone(category) {
+  if (category === "return") return "warning";
+  if (category === "replacement") return "blue";
+  if (category === "custom") return "violet";
+  if (category === "order") return "success";
+  return "neutral";
 }
 
 function renderCounts() {
@@ -1385,6 +1449,214 @@ function closeDelayModal() {
   els.delaySubmitBtn.textContent = "إرسال للمراجعة";
   els.delayProofPreview.classList.add("hidden");
   els.delayProofPreview.removeAttribute("src");
+}
+
+async function openScanner() {
+  const user = currentUser();
+  if (!user || user.role !== "driver") {
+    alert("الماسح مخصص لحسابات السائقين فقط.");
+    return;
+  }
+  scannerProcessedCodes = new Set();
+  setScannerStatus("وجه الكاميرا إلى باركود البوليصة.", "info");
+  els.scannerManualInput.value = "";
+  els.scannerModal.classList.remove("hidden");
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setScannerStatus("المتصفح لا يدعم فتح الكاميرا. استخدم الإدخال اليدوي.", "warning");
+    return;
+  }
+  try {
+    scannerStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    });
+    els.scannerVideo.srcObject = scannerStream;
+    await els.scannerVideo.play();
+    if (!("BarcodeDetector" in window)) {
+      if (await startZxingScanner()) return;
+      setScannerStatus("الكاميرا تعمل، لكن القراءة التلقائية غير مدعومة في هذا المتصفح. اكتب رقم البوليصة يدويا.", "warning");
+      return;
+    }
+    let detectorFormats = ["code_39", "code_128", "ean_13", "ean_8"];
+    if (typeof window.BarcodeDetector.getSupportedFormats === "function") {
+      const supportedFormats = new Set(await window.BarcodeDetector.getSupportedFormats());
+      const nativeFormats = detectorFormats.filter((format) => supportedFormats.has(format));
+      if (!nativeFormats.includes("code_39") && await startZxingScanner()) return;
+      if (nativeFormats.length) detectorFormats = nativeFormats;
+    }
+    try {
+      scannerDetector = new window.BarcodeDetector({ formats: detectorFormats });
+    } catch {
+      if (await startZxingScanner()) return;
+      setScannerStatus("الكاميرا تعمل، لكن نوع قارئ الباركود غير مدعوم هنا. اكتب رقم البوليصة يدويا.", "warning");
+      return;
+    }
+    scannerActive = true;
+    scannerLoop();
+  } catch (error) {
+    setScannerStatus("لم نستطع فتح الكاميرا. اسمح للكاميرا من المتصفح أو استخدم الإدخال اليدوي.", "danger");
+  }
+}
+
+function closeScanner() {
+  scannerActive = false;
+  scannerDetector = null;
+  if (scannerZxingControls?.stop) scannerZxingControls.stop();
+  scannerZxingControls = null;
+  scannerZxingReader = null;
+  scannerBusy = false;
+  scannerCooldownUntil = 0;
+  if (scannerFrame) cancelAnimationFrame(scannerFrame);
+  scannerFrame = null;
+  if (scannerStream) {
+    scannerStream.getTracks().forEach((track) => track.stop());
+    scannerStream = null;
+  }
+  if (els.scannerVideo) {
+    els.scannerVideo.pause();
+    els.scannerVideo.srcObject = null;
+  }
+  els.scannerModal.classList.add("hidden");
+}
+
+async function startZxingScanner() {
+  const zxing = window.ZXingBrowser;
+  if (!zxing?.BrowserMultiFormatOneDReader) return false;
+  try {
+    scannerZxingReader = new zxing.BrowserMultiFormatOneDReader(undefined, {
+      delayBetweenScanAttempts: 180,
+      delayBetweenScanSuccess: 1300
+    });
+    scannerActive = true;
+    setScannerStatus("الكاميرا تعمل. ركز الباركود الخطي داخل الإطار.", "info");
+    scannerZxingControls = await scannerZxingReader.decodeFromVideoElement(els.scannerVideo, (result) => {
+      if (!scannerActive || !result || Date.now() < scannerCooldownUntil) return;
+      const value = typeof result.getText === "function" ? result.getText() : String(result.text || "");
+      if (value) handleScannedCode(value, "camera");
+    });
+    return true;
+  } catch (error) {
+    console.warn("ZXing scanner failed", error);
+    scannerZxingControls = null;
+    scannerZxingReader = null;
+    return false;
+  }
+}
+
+async function scannerLoop() {
+  if (!scannerActive || !scannerDetector || els.scannerModal.classList.contains("hidden")) return;
+  if (Date.now() >= scannerCooldownUntil && els.scannerVideo.readyState >= 2) {
+    try {
+      const codes = await scannerDetector.detect(els.scannerVideo);
+      const values = (codes || []).map((code) => code.rawValue).filter(Boolean);
+      if (values.length) await handleScannedValues(values, "camera");
+    } catch {
+      setScannerStatus("لم تتم قراءة الباركود بوضوح. قرّب الكاميرا أو استخدم الإدخال اليدوي.", "warning");
+      scannerCooldownUntil = Date.now() + 900;
+    }
+  }
+  scannerFrame = requestAnimationFrame(scannerLoop);
+}
+
+async function handleScannedCode(rawCode, source = "camera") {
+  return handleScannedValues([rawCode], source);
+}
+
+async function handleScannedValues(rawCodes, source = "camera") {
+  const normalizedCodes = [...new Set((rawCodes || []).map(normalizeScannerCode).filter(Boolean))];
+  const code = normalizedCodes[0] || "";
+  if (!code) {
+    setScannerStatus("اكتب أو امسح رقم بوليصة صحيح.", "warning");
+    return;
+  }
+  if (scannerBusy) return;
+  scannerBusy = true;
+  if (source === "camera") scannerCooldownUntil = Date.now() + 2200;
+
+  try {
+    await loadState();
+    const matched = normalizedCodes.map((item) => ({ code: item, order: findOrderByScannedCode(item) })).find((item) => item.order);
+    const order = matched?.order;
+    if (!order) {
+      setScannerStatus(`لم نجد طلبا مسندا لك بهذا الرقم: ${code}`, "danger");
+      return;
+    }
+    if (scannerProcessedCodes.has(matched.code)) {
+      setScannerStatus("تم تحديث هذا الباركود في نفس جلسة المسح. امسح بوليصة أخرى أو أغلق الماسح وافتحه لاحقا.", "warning");
+      return;
+    }
+    const transition = scannerTransition(order);
+    if (!transition) {
+      setScannerStatus(`طلب ${order.customer} حالته الحالية "${statusLabels[order.status] || order.status}" ولا يوجد تحديث تلقائي مناسب لها.`, "warning");
+      return;
+    }
+    scannerProcessedCodes.add(matched.code);
+    await api(`/api/orders/${encodeURIComponent(order.id)}`, { method: "PATCH", body: { action: transition.action } });
+    await loadState();
+    render();
+    notifyScannerSuccess();
+    setScannerStatus(`تم تحديث طلب "${order.customer}" إلى "${transition.label}".`, "success");
+    els.scannerManualInput.value = "";
+  } catch (error) {
+    setScannerStatus(error.message || "تعذر تحديث الطلب من الماسح.", "danger");
+  } finally {
+    scannerBusy = false;
+  }
+}
+
+function normalizeScannerCode(rawCode) {
+  const compact = String(rawCode || "").trim().replace(/^\*|\*$/g, "").toUpperCase();
+  const digits = compact.replace(/[^\d]/g, "");
+  if (digits.length >= 6) return digits;
+  return compact.replace(/[^A-Z0-9-]/g, "");
+}
+
+function findOrderByScannedCode(code) {
+  const user = currentUser();
+  const digits = code.replace(/[^\d]/g, "");
+  return state.orders.find((order) => {
+    if (order.driverId !== user.id) return false;
+    const policyNumber = String(order.shippingPolicy?.number || "");
+    const orderNumber = String(order.number || "").replace(/[^\d]/g, "");
+    return policyNumber === digits || orderNumber === digits || policyNumber === code || String(order.number || "").toUpperCase() === code;
+  });
+}
+
+function scannerTransition(order) {
+  if (["ready", "accepted"].includes(order.status)) return { action: "pickup", label: statusLabels.picked_up };
+  if (["picked_up", "late", "delayed"].includes(order.status)) return { action: "complete", label: statusLabels.delivered };
+  return null;
+}
+
+function setScannerStatus(message, tone = "info") {
+  if (!els.scannerStatus) return;
+  els.scannerStatus.textContent = message;
+  els.scannerStatus.dataset.tone = tone;
+}
+
+function notifyScannerSuccess() {
+  navigator.vibrate?.(80);
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const audio = new AudioContext();
+    const oscillator = audio.createOscillator();
+    const gain = audio.createGain();
+    oscillator.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, audio.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, audio.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + 0.16);
+    oscillator.connect(gain);
+    gain.connect(audio.destination);
+    oscillator.start();
+    oscillator.stop(audio.currentTime + 0.18);
+  } catch {
+    // Success feedback is optional.
+  }
 }
 
 function fileToDataUrl(file) {
