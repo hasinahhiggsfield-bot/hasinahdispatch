@@ -337,6 +337,10 @@
                 <h3>كل الطلبات والفلاتر والتوزيع</h3>
               </div>
               <div class="header-actions">
+                <button class="scanner-open-button scanner-trigger admin-only" type="button">
+                  <svg aria-hidden="true"><use href="#icon-scan"></use></svg>
+                  مسح تسليم للسائق
+                </button>
                 <button id="zidSyncBtn" class="secondary-button" type="button">مزامنة زد</button>
                 <button id="assignNeighborhoodBtn" class="primary-button" type="button">توزيع حي كامل</button>
               </div>
@@ -374,7 +378,7 @@
             <p class="eyebrow">تتبع السائقين</p>
             <h3 id="driverNameHeading">السائق</h3>
             <p id="driverRouteSummary"></p>
-            <button id="openScannerBtn" class="scanner-open-button driver-only" type="button">
+            <button id="openScannerBtn" class="scanner-open-button scanner-trigger driver-only" type="button">
               <svg aria-hidden="true"><use href="#icon-scan"></use></svg>
               مسح بوليصة
             </button>
