@@ -20,6 +20,7 @@ const ZID_CLIENT_SECRET = process.env.ZID_CLIENT_SECRET || "";
 const ZID_REDIRECT_URI = process.env.ZID_REDIRECT_URI || "";
 const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda,jiddah,جده").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready,preparing,under_review,under review,review,جاري التجهيز,قيد المراجعة,تحت المراجعة,جاهز").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+const ZID_SHIPPING_METHOD_MATCH = (process.env.ZID_SHIPPING_METHOD_MATCH || "مندوب جدة,مندوب جده,jeddah delegate,jeddah courier").split(",").map((item) => item.trim()).filter(Boolean);
 const ZID_IN_DELIVERY_STATUS = process.env.ZID_IN_DELIVERY_STATUS || "indelivery";
 const ZID_DELIVERED_STATUS = process.env.ZID_DELIVERED_STATUS || "delivered";
 const ZID_READY_STATUS_ALIASES = [
@@ -414,6 +415,31 @@ function zidCity(order) {
   );
 }
 
+function zidShippingMethodText(order) {
+  return [
+    order?.shipping?.method?.name,
+    order?.shipping?.method?.code,
+    order?.shipping?.method?.label,
+    order?.shipping?.company?.name,
+    order?.shipping?.company?.code,
+    order?.shipping?.option?.name,
+    order?.shipping?.option?.code,
+    order?.shipping_method?.name,
+    order?.shipping_method?.code,
+    order?.shipping_method,
+    order?.delivery_option?.name,
+    order?.delivery_option?.code,
+    order?.delivery_method?.name,
+    order?.delivery_method?.code
+  ].map(zidString).filter(Boolean).join(" ");
+}
+
+function isJeddahShippingMethod(order) {
+  const shipping = normalizeText(zidShippingMethodText(order));
+  const matches = ZID_SHIPPING_METHOD_MATCH.map(normalizeText);
+  return Boolean(shipping) && matches.some((match) => shipping.includes(match) || match.includes(shipping));
+}
+
 function isJeddahOrder(order) {
   const city = zidCity(order);
   const addressObject = zidAddress(order);
@@ -429,7 +455,7 @@ function isJeddahOrder(order) {
     order?.delivery_address
   ].filter(Boolean).join(" "));
   const matches = ZID_CITY_MATCH.map(normalizeText);
-  return matches.some((match) => city.includes(match) || address.includes(match));
+  return isJeddahShippingMethod(order) || matches.some((match) => city.includes(match) || address.includes(match));
 }
 
 function isReadyForDispatch(order) {
@@ -571,7 +597,7 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
 }
 
 async function syncZidOrders(state) {
-  const pageLimit = Number(process.env.ZID_SYNC_PAGES || 3);
+  const pageLimit = Number(process.env.ZID_SYNC_PAGES || 10);
   let imported = 0;
   let existing = 0;
   let updated = 0;
@@ -621,10 +647,12 @@ async function syncZidOrders(state) {
       checked += 1;
       const zidOrder = getZidOrder(order);
       const number = zidOrderNumber(zidOrder) || "بدون رقم";
-      if (!isReadyForDispatch(zidOrder)) {
+      const ready = isReadyForDispatch(zidOrder);
+      const jeddahShipping = isJeddahShippingMethod(zidOrder);
+      if (!ready && !jeddahShipping) {
         notReady += 1;
         skipped += 1;
-        samples.notReady.push({ number, status: zidStatusName(zidOrder) || zidStatusCode(zidOrder) });
+        samples.notReady.push({ number, status: zidStatusName(zidOrder) || zidStatusCode(zidOrder), shipping: zidShippingMethodText(zidOrder) });
         return;
       }
       const result = upsertZidOrder(state, zidOrder, "zid_sync");
@@ -639,7 +667,7 @@ async function syncZidOrders(state) {
         skipped += 1;
         if (result.reason === "not_jeddah") {
           notJeddah += 1;
-          samples.notJeddah.push({ number, city: zidCity(zidOrder) || "" });
+          samples.notJeddah.push({ number, city: zidCity(zidOrder) || "", shipping: zidShippingMethodText(zidOrder) });
         } else if (result.reason === "missing_number") {
           missingNumber += 1;
           samples.missingNumber.push(number);
@@ -733,7 +761,9 @@ async function zidDebugStatus(state) {
         statusCode: zidStatusCode(first),
         statusName: zidStatusName(first),
         city: zidCity(first),
+        shippingMethod: zidShippingMethodText(first),
         isJeddah: isJeddahOrder(first),
+        isJeddahShippingMethod: isJeddahShippingMethod(first),
         isReadyForDispatch: isReadyForDispatch(first)
       } : null,
       body: body.slice(0, 500)
