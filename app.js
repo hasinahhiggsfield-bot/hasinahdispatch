@@ -335,7 +335,7 @@ els.scrollTopBtn?.addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
-els.openScannerBtn?.addEventListener("click", openScanner);
+document.querySelectorAll(".scanner-trigger").forEach((button) => button.addEventListener("click", openScanner));
 els.closeScannerBtn?.addEventListener("click", closeScanner);
 els.scannerManualBtn?.addEventListener("click", () => handleScannedCode(els.scannerManualInput.value, "manual"));
 els.scannerManualInput?.addEventListener("keydown", (event) => {
@@ -406,10 +406,12 @@ els.zidSyncBtn?.addEventListener("click", async () => {
     const notJeddah = result.zidSync?.notJeddah || 0;
     const missingNumber = result.zidSync?.missingNumber || 0;
     const excluded = result.zidSync?.excluded || 0;
+    const tooOld = result.zidSync?.tooOld || 0;
     const removedExcluded = result.zidSync?.removedExcluded || 0;
+    const removedOld = result.zidSync?.removedOld || 0;
     alert(imported
-      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nطلبات إرجاع/استرجاع مستبعدة: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nتم فحصها: ${checked}`
-      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nإرجاع/استرجاع مستبعد: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
+      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nطلبات أقدم من أمس مستبعدة: ${tooOld}\nطلبات قديمة تم حذفها: ${removedOld}\nطلبات إرجاع/استرجاع مستبعدة: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nتم فحصها: ${checked}`
+      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nأقدم من أمس: ${tooOld}\nطلبات قديمة تم حذفها: ${removedOld}\nإرجاع/استرجاع مستبعد: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
   } catch (error) {
     alert(error.message);
   } finally {
@@ -2175,12 +2177,14 @@ function closeDelayModal() {
 
 async function openScanner() {
   const user = currentUser();
-  if (!user || user.role !== "driver") {
-    alert("الماسح مخصص لحسابات السائقين فقط.");
+  if (!user || !["admin", "driver"].includes(user.role)) {
+    alert("الماسح مخصص لحسابات الإدارة والسائقين فقط.");
     return;
   }
   scannerProcessedCodes = new Set();
-  setScannerStatus("وجه الكاميرا إلى باركود البوليصة.", "info");
+  setScannerStatus(user.role === "admin"
+    ? "امسح بوليصة طلب مسند لسائق لتأكيد تسليمه للسائق وتحويله إلى قيد التوصيل في زد."
+    : "وجه الكاميرا إلى باركود البوليصة.", "info");
   els.scannerManualInput.value = "";
   els.scannerModal.classList.remove("hidden");
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -2337,7 +2341,7 @@ async function handleScannedValues(rawCodes, source = "camera") {
     const matched = normalizedCodes.map((item) => ({ code: item, order: findOrderByScannedCode(item) })).find((item) => item.order);
     const order = matched?.order;
     if (!order) {
-      setScannerStatus(`لم نجد طلبا مسندا لك بهذا الرقم: ${code}`, "danger");
+      setScannerStatus(scannerNoMatchMessage(code), "danger");
       return;
     }
     if (scannerProcessedCodes.has(matched.code)) {
@@ -2354,7 +2358,7 @@ async function handleScannedValues(rawCodes, source = "camera") {
     await loadState();
     render();
     notifyScannerSuccess();
-    setScannerStatus(`تم تحديث طلب "${order.customer}" إلى "${transition.label}".`, "success");
+    setScannerStatus(scannerSuccessMessage(order, transition), "success");
     els.scannerManualInput.value = "";
   } catch (error) {
     setScannerStatus(error.message || "تعذر تحديث الطلب من الماسح.", "danger");
@@ -2376,7 +2380,10 @@ function findOrderByScannedCode(code) {
   const user = currentUser();
   const digits = code.replace(/[^\d]/g, "");
   return state.orders.find((order) => {
-    if (order.driverId !== user.id) return false;
+    if (!user) return false;
+    if (user.role === "driver" && order.driverId !== user.id) return false;
+    if (user.role === "admin" && !order.driverId) return false;
+    if (!["admin", "driver"].includes(user.role)) return false;
     const policyNumber = String(order.shippingPolicy?.number || "");
     const orderNumber = String(order.number || "").replace(/[^\d]/g, "");
     return policyNumber === digits || orderNumber === digits || policyNumber === code || String(order.number || "").toUpperCase() === code;
@@ -2384,9 +2391,28 @@ function findOrderByScannedCode(code) {
 }
 
 function scannerTransition(order) {
+  const user = currentUser();
+  if (user?.role === "admin") {
+    if (["ready", "accepted", "pending_acceptance"].includes(order.status)) return { action: "pickup", label: statusLabels.picked_up };
+    return null;
+  }
   if (["ready", "accepted"].includes(order.status)) return { action: "pickup", label: statusLabels.picked_up };
   if (["picked_up", "late", "delayed"].includes(order.status)) return { action: "complete", label: statusLabels.delivered };
   return null;
+}
+
+function scannerNoMatchMessage(code) {
+  const user = currentUser();
+  if (user?.role === "admin") return `لم نجد طلبا مسندا لأي سائق بهذا الرقم: ${code}`;
+  return `لم نجد طلبا مسندا لك بهذا الرقم: ${code}`;
+}
+
+function scannerSuccessMessage(order, transition) {
+  const user = currentUser();
+  if (user?.role === "admin" && transition.action === "pickup") {
+    return `تم إثبات تسليم طلب "${order.customer}" إلى السائق ${driverName(order.driverId)} وتحديث زد إلى قيد التوصيل عند توفر الربط.`;
+  }
+  return `تم تحديث طلب "${order.customer}" إلى "${transition.label}".`;
 }
 
 function setScannerStatus(message, tone = "info") {
