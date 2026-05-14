@@ -1337,6 +1337,9 @@ function markLateOrders(state) {
 }
 
 async function handleApi(req, res, url) {
+  if (url.pathname.startsWith("/api/") && url.pathname.length > 1) {
+    url.pathname = url.pathname.replace(/\/+$/, "");
+  }
   const state = await readState();
 
   if (url.pathname === "/api/health") {
