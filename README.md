@@ -69,9 +69,10 @@ ZID_AUTHORIZATION=Bearer your-zid-authorization
 ZID_MANAGER_TOKEN=your-zid-manager-token
 ZID_WEBHOOK_USERNAME=hasinah
 ZID_WEBHOOK_PASSWORD=change-this-long-secret
-ZID_CITY_MATCH=jeddah,جدة,jidda,jedda
-ZID_READY_STATUSES=ready
+ZID_CITY_MATCH=jeddah,جدة,جده,jidda,jedda,jiddah
+ZID_READY_STATUSES=ready,preparing,under_review,under review,review,in_review,in review,جاري التجهيز,قيد التجهيز,قيد المراجعة,تحت المراجعة,جاهز
 ZID_IN_DELIVERY_STATUS=indelivery
+ZID_DELIVERED_STATUS=delivered
 ```
 
 Webhook target URL:
@@ -84,10 +85,12 @@ Subscribe Zid webhooks to:
 
 ```text
 order.create
+order.ready
+order.canceled
 order.status.update
 ```
 
-The sync button in the orders dashboard also pulls recent ready Jeddah orders manually. When an admin assigns a Zid order to a driver, the app pushes the Zid order status to `indelivery`.
+The sync button in the orders dashboard also pulls recent Jeddah orders whose Zid status matches the allowed statuses above. When a driver picks up a Zid order, the app pushes the Zid order status to `indelivery`; when delivered, it pushes `delivered`.
 
 ## Shipping Policies
 
