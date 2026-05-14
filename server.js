@@ -21,6 +21,7 @@ const ZID_REDIRECT_URI = process.env.ZID_REDIRECT_URI || "";
 const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda,jiddah,جده").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready,preparing,under_review,under review,review,جاري التجهيز,قيد المراجعة,تحت المراجعة,جاهز").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_SHIPPING_METHOD_MATCH = (process.env.ZID_SHIPPING_METHOD_MATCH || "مندوب جدة,مندوب جده,jeddah delegate,jeddah courier").split(",").map((item) => item.trim()).filter(Boolean);
+const ZID_EXCLUDED_STATUSES = (process.env.ZID_EXCLUDED_STATUSES || "returned,returning,return requested,return_in_progress,reverse,reverse pickup,refund,refunded,exchange,exchanged,استرجاع,ارجاع,إرجاع,مرتجع,مسترجع,جاري الاسترجاع,جارى الاسترجاع,قيد الاسترجاع,تحت الاسترجاع,تم الاسترجاع,طلب استرجاع,استبدال,مستبدل").split(",").map((item) => item.trim()).filter(Boolean);
 const ZID_IN_DELIVERY_STATUS = process.env.ZID_IN_DELIVERY_STATUS || "indelivery";
 const ZID_DELIVERED_STATUS = process.env.ZID_DELIVERED_STATUS || "delivered";
 const ZID_READY_STATUS_ALIASES = [
@@ -440,6 +441,29 @@ function isJeddahShippingMethod(order) {
   return Boolean(shipping) && matches.some((match) => shipping.includes(match) || match.includes(shipping));
 }
 
+function zidExclusionText(order) {
+  return [
+    zidStatusCode(order),
+    zidStatusName(order),
+    order?.type,
+    order?.order_type,
+    order?.flow_type,
+    order?.return_status,
+    order?.refund_status,
+    order?.exchange_status,
+    order?.order_status?.type,
+    order?.order_status?.group,
+    order?.display_status?.type,
+    order?.display_status?.group
+  ].map(zidString).filter(Boolean).join(" ");
+}
+
+function isExcludedZidOrder(order) {
+  const text = normalizeStatusValue(zidExclusionText(order));
+  const excluded = ZID_EXCLUDED_STATUSES.map(normalizeStatusValue).filter(Boolean);
+  return Boolean(text) && excluded.some((value) => text === value || text.includes(value) || value.includes(text));
+}
+
 function isJeddahOrder(order) {
   const city = zidCity(order);
   const addressObject = zidAddress(order);
@@ -534,6 +558,7 @@ function zidDashboardUrl(order, number) {
 function upsertZidOrder(state, rawOrder, source = "zid") {
   const order = getZidOrder(rawOrder);
   if (!order || !zidOrderNumber(order)) return { saved: false, reason: "missing_number" };
+  if (isExcludedZidOrder(order)) return { saved: false, reason: "excluded_status" };
   if (!isJeddahOrder(order)) return { saved: false, reason: "not_jeddah" };
 
   const number = zidOrderNumber(order);
@@ -596,6 +621,26 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
   return { saved: true, created: !wasExisting, updated: wasExisting, reason: wasExisting ? "existing" : "created", order: next, number };
 }
 
+function cleanupExcludedZidOrders(state) {
+  const before = state.orders.length;
+  state.orders = state.orders.filter((order) => {
+    if (!order?.zid?.id || !isExcludedImportedOrder(order)) return true;
+    return ["picked_up", "delivered", "completed"].includes(order.status) || Boolean(order.shippingPolicy);
+  });
+  return before - state.orders.length;
+}
+
+function isExcludedImportedOrder(order) {
+  const text = normalizeStatusValue([
+    order.zidStatusCode,
+    order.zidStatusName,
+    order.type,
+    order.flowType
+  ].filter(Boolean).join(" "));
+  const excluded = ZID_EXCLUDED_STATUSES.map(normalizeStatusValue).filter(Boolean);
+  return Boolean(text) && excluded.some((value) => text === value || text.includes(value) || value.includes(text));
+}
+
 async function syncZidOrders(state) {
   const pageLimit = Number(process.env.ZID_SYNC_PAGES || 10);
   let imported = 0;
@@ -605,14 +650,17 @@ async function syncZidOrders(state) {
   let notReady = 0;
   let notJeddah = 0;
   let missingNumber = 0;
+  let excluded = 0;
   let checked = 0;
   const samples = {
     imported: [],
     existing: [],
     notReady: [],
     notJeddah: [],
-    missingNumber: []
+    missingNumber: [],
+    excluded: []
   };
+  const removedExcluded = cleanupExcludedZidOrders(state);
 
   for (let page = 1; page <= pageLimit; page += 1) {
     const params = new URLSearchParams({
@@ -647,9 +695,15 @@ async function syncZidOrders(state) {
       checked += 1;
       const zidOrder = getZidOrder(order);
       const number = zidOrderNumber(zidOrder) || "بدون رقم";
+      if (isExcludedZidOrder(zidOrder)) {
+        excluded += 1;
+        skipped += 1;
+        samples.excluded.push({ number, status: zidStatusName(zidOrder) || zidStatusCode(zidOrder) });
+        return;
+      }
       const ready = isReadyForDispatch(zidOrder);
       const jeddahShipping = isJeddahShippingMethod(zidOrder);
-      if (!ready && !jeddahShipping) {
+      if (!ready) {
         notReady += 1;
         skipped += 1;
         samples.notReady.push({ number, status: zidStatusName(zidOrder) || zidStatusCode(zidOrder), shipping: zidShippingMethodText(zidOrder) });
@@ -671,6 +725,9 @@ async function syncZidOrders(state) {
         } else if (result.reason === "missing_number") {
           missingNumber += 1;
           samples.missingNumber.push(number);
+        } else if (result.reason === "excluded_status") {
+          excluded += 1;
+          samples.excluded.push({ number, status: zidStatusName(zidOrder) || zidStatusCode(zidOrder) });
         }
       }
     });
@@ -685,13 +742,16 @@ async function syncZidOrders(state) {
     notReady,
     notJeddah,
     missingNumber,
+    excluded,
+    removedExcluded,
     checked,
     samples: {
       imported: compactReasonSample(samples.imported),
       existing: compactReasonSample(samples.existing),
       notReady: compactReasonSample(samples.notReady),
       notJeddah: compactReasonSample(samples.notJeddah),
-      missingNumber: compactReasonSample(samples.missingNumber)
+      missingNumber: compactReasonSample(samples.missingNumber),
+      excluded: compactReasonSample(samples.excluded)
     }
   };
 }
@@ -764,6 +824,7 @@ async function zidDebugStatus(state) {
         shippingMethod: zidShippingMethodText(first),
         isJeddah: isJeddahOrder(first),
         isJeddahShippingMethod: isJeddahShippingMethod(first),
+        isExcluded: isExcludedZidOrder(first),
         isReadyForDispatch: isReadyForDispatch(first)
       } : null,
       body: body.slice(0, 500)
