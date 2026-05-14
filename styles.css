@@ -1368,6 +1368,12 @@ body[data-role="driver"] .driver-only {
   transition: transform 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease);
 }
 
+.header-actions .scanner-open-button {
+  margin-top: 0;
+  min-height: 42px;
+  padding: 9px 13px;
+}
+
 .scanner-open-button:hover {
   border-color: rgba(119, 200, 255, 0.48);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
