@@ -9,7 +9,7 @@
     <title>حسينة | ديسباتش السائقين</title>
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="assets/hasinah-icon.svg" />
-    <link rel="stylesheet" href="styles.css?v=driver-scanner-2" />
+  <link rel="stylesheet" href="styles.css?v=route-planner-2" />
   </head>
   <body>
     <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -98,6 +98,7 @@
           <button class="nav-tab admin-only" data-view="orders" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-orders"></use></svg><span>عرض الطلبات</span></button>
           <button class="nav-tab admin-only" data-view="zidOrders" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-zid"></use></svg><span>طلبات زد</span></button>
           <button class="nav-tab active" data-view="driver" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-route"></use></svg><span>تتبع السائقين</span></button>
+          <button class="nav-tab" data-view="routeMap" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-route"></use></svg><span>مخطط المسار</span></button>
           <button class="nav-tab admin-only" data-view="addDriver" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-driver-add"></use></svg><span>إضافة سائق</span></button>
           <button class="nav-tab admin-only" data-view="accounts" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-accounts"></use></svg><span>الحسابات</span></button>
           <button class="nav-tab admin-only" data-view="requests" type="button"><svg class="nav-icon" aria-hidden="true"><use href="#icon-review"></use></svg><span>المراجعة</span></button>
@@ -292,6 +293,16 @@
             <div id="customFields" class="custom-fields hidden">
               <div class="two-col">
                 <label>
+                  اسم المرسل
+                  <input name="senderName" placeholder="اسم الشخص المرسل" />
+                </label>
+                <label>
+                  اسم المستلم
+                  <input name="recipientName" placeholder="اسم المستلم" />
+                </label>
+              </div>
+              <div class="two-col">
+                <label>
                   مبلغ المشوار الخاص
                   <input name="customAmount" inputmode="decimal" placeholder="45" />
                 </label>
@@ -303,6 +314,14 @@
               <label>
                 المؤقت بعد قبول السائق بالساعات
                 <input name="timerHours" inputmode="numeric" placeholder="24" />
+              </label>
+              <label>
+                ملاحظة اختيارية
+                <textarea name="customNote" rows="3" placeholder="تفاصيل إضافية للسائق أو الإدارة"></textarea>
+              </label>
+              <label class="check-row">
+                <input name="customConfirmed" type="checkbox" value="yes" />
+                <span>تم تأكيد الحي والمرسل والمستلم ومبلغ المشوار</span>
               </label>
             </div>
 
@@ -366,6 +385,37 @@
           </section>
           <div id="driverStats" class="order-stats driver-stats" aria-label="إحصائيات السائق"></div>
           <div id="driverOrders" class="driver-orders"></div>
+        </section>
+
+        <section id="routeMapView" class="view">
+          <section class="route-map-shell panel">
+            <div class="route-map-hero">
+              <div>
+                <p class="eyebrow">مخطط مسار السائق</p>
+                <h3 id="routeMapTitle">اختيار ترتيب المناطق</h3>
+                <p id="routeMapSummary">حدد المناطق والأحياء حسب ترتيب التسليم ثم افتح المسار في Google Maps.</p>
+              </div>
+              <div class="route-map-actions">
+                <button id="routeAutoBtn" class="secondary-button" type="button">اقتراح تلقائي</button>
+                <button id="routeClearBtn" class="ghost-button" type="button">إعادة الترتيب</button>
+                <button id="routeOpenBtn" class="primary-button" type="button">فتح المسار في Google Maps</button>
+              </div>
+            </div>
+
+            <div class="route-map-layout">
+              <div id="routeMapCanvas" class="route-map-canvas route-planner-canvas" aria-label="مخطط مناطق جدة للسائق"></div>
+              <aside class="route-plan-panel">
+                <div class="panel-heading compact-heading">
+                  <div>
+                    <p class="eyebrow">المسار المختار</p>
+                    <h3>ترتيب التوصيل</h3>
+                  </div>
+                </div>
+                <div id="routeSelectedList" class="route-selected-list"></div>
+                <div id="routeUnknownList" class="route-unknown-list"></div>
+              </aside>
+            </div>
+          </section>
         </section>
 
         <section id="addDriverView" class="view">
@@ -497,6 +547,6 @@
     </button>
 
     <script src="assets/vendor-zxing-browser.min.js?v=0.1.5"></script>
-    <script src="app.js?v=driver-scanner-3"></script>
+  <script src="app.js?v=zid-sync-1"></script>
   </body>
 </html>
