@@ -18,9 +18,24 @@ const ZID_OAUTH_BASE = (process.env.ZID_OAUTH_URL || "https://oauth.zid.sa").rep
 const ZID_CLIENT_ID = process.env.ZID_CLIENT_ID || "";
 const ZID_CLIENT_SECRET = process.env.ZID_CLIENT_SECRET || "";
 const ZID_REDIRECT_URI = process.env.ZID_REDIRECT_URI || "";
-const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
-const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready,جاري التجهيز").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda,jiddah,جده").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready,preparing,under_review,under review,review,جاري التجهيز,قيد المراجعة,تحت المراجعة,جاهز").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_IN_DELIVERY_STATUS = process.env.ZID_IN_DELIVERY_STATUS || "indelivery";
+const ZID_DELIVERED_STATUS = process.env.ZID_DELIVERED_STATUS || "delivered";
+const ZID_READY_STATUS_ALIASES = [
+  "ready",
+  "preparing",
+  "under_review",
+  "under review",
+  "review",
+  "in_review",
+  "in review",
+  "جاري التجهيز",
+  "قيد المراجعة",
+  "تحت المراجعة",
+  "جاهز",
+  "قيد التجهيز"
+].map((item) => normalizeText(item));
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -42,7 +57,8 @@ function seedState() {
   return {
     users: [{ id: uid("usr"), role: "admin", name: "يحيى", username: "yahya", password: "123123", phone: "" }],
     orders: [],
-    payments: []
+    payments: [],
+    routePlans: []
   };
 }
 
@@ -51,7 +67,11 @@ async function readLocalState() {
   try {
     const raw = await fs.readFile(DATA_FILE, "utf8");
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed.users) && Array.isArray(parsed.orders)) return parsed;
+    if (Array.isArray(parsed.users) && Array.isArray(parsed.orders)) {
+      parsed.payments = Array.isArray(parsed.payments) ? parsed.payments : [];
+      parsed.routePlans = Array.isArray(parsed.routePlans) ? parsed.routePlans : [];
+      return parsed;
+    }
   } catch {
     // Create a clean state on first run.
   }
@@ -179,8 +199,9 @@ function publicUser(user) {
 
 function publicState(state) {
   state.payments = Array.isArray(state.payments) ? state.payments : [];
+  state.routePlans = Array.isArray(state.routePlans) ? state.routePlans : [];
   markLateOrders(state);
-  return { users: state.users.map((user) => ({ ...user })), orders: state.orders, payments: state.payments };
+  return { users: state.users.map((user) => ({ ...user })), orders: state.orders, payments: state.payments, routePlans: state.routePlans };
 }
 
 function normalizePhone(phone) {
@@ -300,7 +321,31 @@ function generatePolicyNumber(state) {
 }
 
 function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u064B-\u065F\u0670\u0300-\u036f]/g, "")
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/ة/g, "ه");
+}
+
+function normalizeStatusValue(value) {
+  return normalizeText(value).replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+}
+
+function zidString(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "object") return value.name || value.label || value.ar || value.en || value.value || "";
+  return "";
+}
+
+function compactReasonSample(list, limit = 8) {
+  return list.slice(0, limit);
 }
 
 function zidTokenFromState(state) {
@@ -333,31 +378,76 @@ function getZidOrder(input) {
 }
 
 function zidStatusCode(order) {
-  return normalizeText(order?.order_status?.code || order?.display_status?.code || order?.status?.code || order?.status);
+  return normalizeText(
+    order?.order_status?.code ||
+    order?.order_status?.slug ||
+    order?.display_status?.code ||
+    order?.display_status?.slug ||
+    order?.status?.code ||
+    order?.status?.slug ||
+    order?.status
+  );
 }
 
 function zidStatusName(order) {
-  return String(order?.order_status?.name || order?.display_status?.name || order?.status?.name || zidStatusCode(order) || "");
+  return String(
+    order?.order_status?.name ||
+    order?.order_status?.label ||
+    order?.display_status?.name ||
+    order?.display_status?.label ||
+    order?.status?.name ||
+    order?.status?.label ||
+    zidStatusCode(order) ||
+    ""
+  );
 }
 
 function zidCity(order) {
-  const address = order?.shipping?.address || order?.address || {};
-  return normalizeText(address?.city?.name || address?.meta?.city_name || address?.city_name || address?.city || "");
+  const address = zidAddress(order);
+  return normalizeText(
+    zidString(address?.city) ||
+    zidString(address?.meta?.city_name) ||
+    zidString(address?.city_name) ||
+    zidString(order?.city) ||
+    zidString(order?.customer?.city) ||
+    ""
+  );
 }
 
 function isJeddahOrder(order) {
   const city = zidCity(order);
+  const addressObject = zidAddress(order);
   const address = normalizeText([
-    order?.shipping?.address?.formatted_address,
-    order?.shipping?.address?.district,
-    order?.shipping?.address?.short_address
+    addressObject?.formatted_address,
+    addressObject?.district,
+    addressObject?.short_address,
+    addressObject?.street,
+    addressObject?.meta?.city_name,
+    addressObject?.meta?.district,
+    order?.shipping?.method?.name,
+    order?.shipping_address,
+    order?.delivery_address
   ].filter(Boolean).join(" "));
-  return ZID_CITY_MATCH.some((match) => city.includes(match) || address.includes(match));
+  const matches = ZID_CITY_MATCH.map(normalizeText);
+  return matches.some((match) => city.includes(match) || address.includes(match));
 }
 
 function isReadyForDispatch(order) {
-  const values = [zidStatusCode(order), zidStatusName(order)].map(normalizeText).filter(Boolean);
-  return !ZID_READY_STATUSES.length || ZID_READY_STATUSES.some((status) => values.includes(status));
+  const values = [zidStatusCode(order), zidStatusName(order)]
+    .map(normalizeStatusValue)
+    .filter(Boolean);
+  const allowed = [...ZID_READY_STATUSES, ...ZID_READY_STATUS_ALIASES].map(normalizeStatusValue).filter(Boolean);
+  return !allowed.length || allowed.some((status) => values.some((value) => value === status || value.includes(status) || status.includes(value)));
+}
+
+function zidAddress(order) {
+  return order?.shipping?.address ||
+    order?.address ||
+    order?.shipping_address ||
+    order?.delivery_address ||
+    order?.customer?.address ||
+    order?.customer?.addresses?.[0] ||
+    {};
 }
 
 function productImage(product) {
@@ -376,7 +466,7 @@ function normalizeZidProducts(order) {
 }
 
 function zidMapLink(order) {
-  const address = order?.shipping?.address || order?.address || {};
+  const address = zidAddress(order);
   const lat = Number(address?.lat || address?.latitude || 0);
   const lng = Number(address?.lng || address?.longitude || 0);
   const text = [
@@ -395,7 +485,7 @@ function zidMapLink(order) {
 }
 
 function zidCustomerName(order) {
-  const name = order?.customer?.name || order?.consignee?.name || "";
+  const name = order?.customer?.name || order?.consignee?.name || order?.recipient?.name || "";
   const first = order?.customer?.first_name || order?.customer?.firstname || "";
   const last = order?.customer?.last_name || order?.customer?.lastname || "";
   return String(name || `${first} ${last}`.trim() || "عميل زد").trim();
@@ -417,13 +507,23 @@ function zidDashboardUrl(order, number) {
 
 function upsertZidOrder(state, rawOrder, source = "zid") {
   const order = getZidOrder(rawOrder);
-  if (!order || !zidOrderNumber(order) || !isJeddahOrder(order)) return { saved: false, reason: "not_jeddah" };
+  if (!order || !zidOrderNumber(order)) return { saved: false, reason: "missing_number" };
+  if (!isJeddahOrder(order)) return { saved: false, reason: "not_jeddah" };
 
   const number = zidOrderNumber(order);
   const existing = state.orders.find((item) => item.zid?.id && String(item.zid.id) === String(order.id)) || state.orders.find((item) => item.number === number);
-  const address = order?.shipping?.address || {};
+  const wasExisting = Boolean(existing);
+  const address = zidAddress(order);
   const now = new Date().toISOString();
   const orderCreatedAt = zidOrderCreatedAt(order) || existing?.orderCreatedAt || existing?.requestDate || now;
+  const area = String(
+    address?.district ||
+    address?.meta?.district ||
+    address?.short_address ||
+    address?.formatted_address ||
+    address?.street ||
+    "جدة"
+  ).trim();
   const next = {
     id: existing?.id || uid("ord"),
     kind: "customer",
@@ -431,8 +531,8 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
     type: "Delivery",
     flowType: "order",
     customer: zidCustomerName(order),
-    phone: normalizePhone(order?.customer?.mobile || order?.customer?.phone || order?.consignee?.mobile || ""),
-    area: String(address?.district || address?.short_address || address?.formatted_address || "جدة").trim(),
+    phone: normalizePhone(order?.customer?.mobile || order?.customer?.phone || order?.consignee?.mobile || order?.recipient?.mobile || ""),
+    area,
     driverId: existing?.driverId || "",
     customAmount: 0,
     timerHours: 24,
@@ -467,51 +567,127 @@ function upsertZidOrder(state, rawOrder, source = "zid") {
 
   if (existing) Object.assign(existing, next);
   else state.orders.unshift(next);
-  return { saved: true, order: next };
+  return { saved: true, created: !wasExisting, updated: wasExisting, reason: wasExisting ? "existing" : "created", order: next, number };
 }
 
 async function syncZidOrders(state) {
   const pageLimit = Number(process.env.ZID_SYNC_PAGES || 3);
   let imported = 0;
+  let existing = 0;
+  let updated = 0;
   let skipped = 0;
+  let notReady = 0;
+  let notJeddah = 0;
+  let missingNumber = 0;
+  let checked = 0;
+  const samples = {
+    imported: [],
+    existing: [],
+    notReady: [],
+    notJeddah: [],
+    missingNumber: []
+  };
 
   for (let page = 1; page <= pageLimit; page += 1) {
-    const response = await fetch(`${ZID_API_BASE}/store/orders?payload_type=full&page=${page}&per_page=50`, {
+    const params = new URLSearchParams({
+      payload_type: "full",
+      page: String(page),
+      per_page: "50"
+    });
+    const response = await fetch(`${ZID_API_BASE}/store/orders?${params.toString()}`, {
       headers: zidHeaders(state, { Accept: "application/json" })
     });
-    if (!response.ok) throw new Error(`Zid sync failed with ${response.status}.`);
-    const payload = await response.json();
-    const orders = Array.isArray(payload.orders) ? payload.orders : [];
+    const text = await response.text();
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = { raw: text };
+    }
+    if (!response.ok) {
+      const message = payload?.message || payload?.error || payload?.raw || response.statusText;
+      throw new Error(`Zid sync failed with ${response.status}: ${String(message).slice(0, 240)}`);
+    }
+    const orders = Array.isArray(payload.orders)
+      ? payload.orders
+      : Array.isArray(payload.data?.orders)
+        ? payload.data.orders
+        : Array.isArray(payload.data)
+          ? payload.data
+          : Array.isArray(payload.results)
+            ? payload.results
+            : [];
     orders.forEach((order) => {
-      if (!isReadyForDispatch(order)) {
+      checked += 1;
+      const zidOrder = getZidOrder(order);
+      const number = zidOrderNumber(zidOrder) || "بدون رقم";
+      if (!isReadyForDispatch(zidOrder)) {
+        notReady += 1;
         skipped += 1;
+        samples.notReady.push({ number, status: zidStatusName(zidOrder) || zidStatusCode(zidOrder) });
         return;
       }
-      const result = upsertZidOrder(state, order, "zid_sync");
-      if (result.saved) imported += 1;
-      else skipped += 1;
+      const result = upsertZidOrder(state, zidOrder, "zid_sync");
+      if (result.created) {
+        imported += 1;
+        samples.imported.push(result.number || number);
+      } else if (result.updated) {
+        existing += 1;
+        updated += 1;
+        samples.existing.push(result.number || number);
+      } else {
+        skipped += 1;
+        if (result.reason === "not_jeddah") {
+          notJeddah += 1;
+          samples.notJeddah.push({ number, city: zidCity(zidOrder) || "" });
+        } else if (result.reason === "missing_number") {
+          missingNumber += 1;
+          samples.missingNumber.push(number);
+        }
+      }
     });
     if (orders.length < 50) break;
   }
 
-  return { imported, skipped };
+  return {
+    imported,
+    existing,
+    updated,
+    skipped,
+    notReady,
+    notJeddah,
+    missingNumber,
+    checked,
+    samples: {
+      imported: compactReasonSample(samples.imported),
+      existing: compactReasonSample(samples.existing),
+      notReady: compactReasonSample(samples.notReady),
+      notJeddah: compactReasonSample(samples.notJeddah),
+      missingNumber: compactReasonSample(samples.missingNumber)
+    }
+  };
 }
 
 async function updateZidOrderStatus(order, statusCode = ZID_IN_DELIVERY_STATUS, state = null) {
   if (!order?.zid?.id) return { skipped: true };
-  const body = new FormData();
-  body.set("order_status", statusCode);
-  body.set("tracking_number", order.number || "");
-  body.set("tracking_url", "");
-  body.set("waybill_url", "");
-  body.set("inventory_address_id", process.env.ZID_INVENTORY_ADDRESS_ID || "");
+  const body = {
+    order_status: statusCode,
+    tracking_number: order.shippingPolicy?.number || order.number || "",
+    tracking_url: "",
+    waybill_url: ""
+  };
+  if (process.env.ZID_INVENTORY_ADDRESS_ID) body.inventory_address_id = process.env.ZID_INVENTORY_ADDRESS_ID;
   const response = await fetch(`${ZID_API_BASE}/store/orders/${encodeURIComponent(order.zid.id)}/change-order-status`, {
     method: "POST",
-    headers: zidHeaders(state, { Accept: "application/json" }),
-    body
+    headers: zidHeaders(state, { Accept: "application/json", "Content-Type": "application/json" }),
+    body: JSON.stringify(body)
   });
-  if (!response.ok) throw new Error(`Zid status update failed with ${response.status}.`);
-  return response.json();
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload?.message || payload?.error || payload?.errors?.[0]?.message || response.statusText;
+    throw new Error(`Zid status update failed with ${response.status}: ${message}`);
+  }
+  return payload || { ok: true };
 }
 
 async function zidDebugStatus(state) {
@@ -541,10 +717,26 @@ async function zidDebugStatus(state) {
     const response = await fetch(`${ZID_API_BASE}/store/orders?payload_type=full&page=1&per_page=1`, {
       headers: zidHeaders(state, { Accept: "application/json" })
     });
+    const body = await response.text();
+    let parsed = {};
+    try {
+      parsed = body ? JSON.parse(body) : {};
+    } catch {
+      parsed = { raw: body };
+    }
+    const first = Array.isArray(parsed.orders) ? parsed.orders[0] : Array.isArray(parsed.data) ? parsed.data[0] : Array.isArray(parsed.data?.orders) ? parsed.data.orders[0] : null;
     debug.ordersTest = {
       ok: response.ok,
       status: response.status,
-      body: (await response.text()).slice(0, 500)
+      firstOrder: first ? {
+        number: zidOrderNumber(first),
+        statusCode: zidStatusCode(first),
+        statusName: zidStatusName(first),
+        city: zidCity(first),
+        isJeddah: isJeddahOrder(first),
+        isReadyForDispatch: isReadyForDispatch(first)
+      } : null,
+      body: body.slice(0, 500)
     };
   } catch (error) {
     debug.ordersTest = { ok: false, message: error.message };
@@ -651,23 +843,41 @@ function createAccount(state, body) {
   });
 }
 
+function generateCustomTripNumber(state) {
+  let number = "";
+  do {
+    number = `TRIP-${Math.floor(100000 + Math.random() * 900000)}`;
+  } while (state.orders.some((order) => String(order.number) === number));
+  return number;
+}
+
 function createOrder(state, body) {
-  if (!body.number || !body.customer || !body.phone || !body.area) {
-    throw new Error("رقم الطلب والاسم ورقم الواتساب والحي مطلوبة.");
-  }
   const kind = body.kind === "custom" ? "custom" : "customer";
   const now = new Date();
   const customAmount = Number(body.customAmount || 0);
   const timerHours = Number(body.timerHours || 24);
-  if (kind === "custom" && (!customAmount || customAmount <= 0)) throw new Error("المشوار الخاص يحتاج مبلغ محدد.");
+  const senderName = String(body.senderName || body.customer || "").trim();
+  const recipientName = String(body.recipientName || "").trim();
+  if (kind === "custom") {
+    if (!senderName || !recipientName || !body.area) throw new Error("المشوار الخاص يحتاج اسم المرسل واسم المستلم والحي.");
+    if (!customAmount || customAmount <= 0) throw new Error("المشوار الخاص يحتاج مبلغ محدد.");
+    if (!body.customConfirmed) throw new Error("أكد تفاصيل المشوار الخاص قبل حفظه.");
+  } else if (!body.number || !body.customer || !body.phone || !body.area) {
+    throw new Error("رقم الطلب والاسم ورقم الواتساب والحي مطلوبة.");
+  }
 
   state.orders.unshift({
     id: uid("ord"),
     kind,
-    number: String(body.number).trim(),
+    number: kind === "custom" ? String(body.number || generateCustomTripNumber(state)).trim() : String(body.number).trim(),
     type: kind === "custom" ? "Custom delivery" : String(body.type || "Delivery"),
     flowType: kind === "custom" ? "custom" : "order",
-    customer: String(body.customer).trim(),
+    customer: kind === "custom" ? recipientName : String(body.customer).trim(),
+    senderName: kind === "custom" ? senderName : "",
+    recipientName: kind === "custom" ? recipientName : "",
+    customNote: kind === "custom" ? String(body.customNote || "").trim() : "",
+    customConfirmed: kind === "custom",
+    confirmedAt: kind === "custom" ? now.toISOString() : "",
     phone: normalizePhone(body.phone),
     area: String(body.area).trim(),
     locationText: String(body.locationText || "").trim(),
@@ -716,6 +926,23 @@ function createPayment(state, body) {
     note: String(body.note || "").trim(),
     createdAt: new Date().toISOString()
   });
+}
+
+function saveRoutePlanState(state, driverId, body) {
+  state.routePlans = Array.isArray(state.routePlans) ? state.routePlans : [];
+  const cleanDriverId = String(driverId || "").trim();
+  const neighborhoodKeys = Array.isArray(body.neighborhoodKeys) ? body.neighborhoodKeys.map((key) => String(key)).filter(Boolean) : [];
+  if (!state.users.some((user) => user.id === cleanDriverId && user.role === "driver")) {
+    throw new Error("لم يتم العثور على السائق لحفظ المسار.");
+  }
+  const now = new Date().toISOString();
+  const existing = state.routePlans.find((plan) => plan.driverId === cleanDriverId);
+  if (existing) {
+    existing.neighborhoodKeys = neighborhoodKeys;
+    existing.updatedAt = now;
+  } else {
+    state.routePlans.push({ driverId: cleanDriverId, neighborhoodKeys, updatedAt: now });
+  }
 }
 
 function updateOrderState(state, id, patch) {
@@ -768,7 +995,7 @@ function updateOrderState(state, id, patch) {
   if (patch.action === "approve_request") approveRequest(order, patch.requestId, now);
   if (patch.action === "reject_request") rejectRequest(order, patch.requestId);
 
-  if (["accepted", "picked_up"].includes(order.status) && isLate(order, now)) order.status = "late";
+  if (order.kind === "custom" && ["accepted", "picked_up"].includes(order.status) && isLate(order, now)) order.status = "late";
   order.updatedAt = now.toISOString();
   order.history = Array.isArray(order.history) ? order.history : [];
   order.history.push({ at: now.toISOString(), action: patch.action || "updated" });
@@ -862,15 +1089,20 @@ function duplicateServiceOrder(state, source, flowType, now, replacementOrderNum
 function acceptOrder(order, now) {
   order.status = "accepted";
   order.acceptedAt = now.toISOString();
-  const hours = order.kind === "custom" ? Number(order.timerHours || 24) : 24;
-  order.deadlineAt = new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
+  if (order.kind === "custom") {
+    const hours = Number(order.timerHours || 24);
+    order.deadlineAt = new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
+  } else {
+    order.deadlineAt = "";
+  }
 }
 
 function pickUpOrder(order, now) {
   order.status = "picked_up";
   order.pickedUpAt = now.toISOString();
   order.acceptedAt = order.acceptedAt || now.toISOString();
-  order.deadlineAt = new Date(now.getTime() + DAY_MS).toISOString();
+  if (order.kind !== "custom") order.deadlineAt = "";
+  else order.deadlineAt = order.deadlineAt || new Date(now.getTime() + DAY_MS).toISOString();
   order.cutRemoved = false;
 }
 
@@ -890,7 +1122,8 @@ function approveRequest(order, requestId, now) {
   request.status = "approved";
   request.reviewedAt = now.toISOString();
   order.status = order.pickedUpAt ? "picked_up" : "ready";
-  order.deadlineAt = new Date(now.getTime() + DAY_MS).toISOString();
+  if (order.kind === "custom") order.deadlineAt = new Date(now.getTime() + DAY_MS).toISOString();
+  else order.deadlineAt = "";
   order.cutRemoved = true;
 }
 
@@ -904,11 +1137,15 @@ function findRequest(order, requestId) {
 }
 
 function isLate(order, now = new Date()) {
-  return order.deadlineAt && now.getTime() > new Date(order.deadlineAt).getTime() && !order.cutRemoved;
+  return order.kind === "custom" && order.deadlineAt && now.getTime() > new Date(order.deadlineAt).getTime() && !order.cutRemoved;
 }
 
 function markLateOrders(state) {
   state.orders.forEach((order) => {
+    if (order.kind !== "custom") {
+      order.deadlineAt = "";
+      if (order.status === "late") order.status = order.pickedUpAt ? "picked_up" : "accepted";
+    }
     if (["accepted", "picked_up"].includes(order.status) && isLate(order)) order.status = "late";
   });
 }
@@ -975,18 +1212,16 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  const routePlanMatch = url.pathname.match(/^\/api\/route-plans\/([^/]+)$/);
+  if (routePlanMatch && req.method === "PUT") {
+    saveRoutePlanState(state, decodeURIComponent(routePlanMatch[1]), await readBody(req));
+    await writeState(state);
+    send(res, 200, publicState(state));
+    return true;
+  }
+
   if (url.pathname === "/api/orders/assign-neighborhood" && req.method === "POST") {
     const assigned = assignNeighborhood(state, await readBody(req));
-    for (const order of assigned) {
-      try {
-        await updateZidOrderStatus(order, ZID_IN_DELIVERY_STATUS, state);
-        order.zidStatusCode = ZID_IN_DELIVERY_STATUS;
-        order.zidStatusName = "قيد التوصيل";
-        order.zid.lastStatusPushAt = new Date().toISOString();
-      } catch (error) {
-        order.zidStatusError = error.message;
-      }
-    }
     await writeState(state);
     send(res, 200, { ...publicState(state), assigned: assigned.length });
     return true;
@@ -1089,13 +1324,15 @@ async function handleApi(req, res, url) {
     const patch = await readBody(req);
     updateOrderState(state, id, patch);
     const order = state.orders.find((item) => item.id === id);
-    if (order?.driverId && order?.zid?.id && (Object.prototype.hasOwnProperty.call(patch, "driverId") || patch.action === "pickup")) {
+    const zidStatus = patch.action === "pickup" ? ZID_IN_DELIVERY_STATUS : patch.action === "complete" ? ZID_DELIVERED_STATUS : "";
+    if (order?.driverId && order?.zid?.id && zidStatus) {
       try {
-        await updateZidOrderStatus(order, ZID_IN_DELIVERY_STATUS, state);
-        order.zidStatusCode = ZID_IN_DELIVERY_STATUS;
-        order.zidStatusName = "قيد التوصيل";
+        await updateZidOrderStatus(order, zidStatus, state);
+        order.zidStatusCode = zidStatus;
+        order.zidStatusName = zidStatus === ZID_DELIVERED_STATUS ? "تم التوصيل" : "قيد التوصيل";
         order.zid.lastStatusPushAt = new Date().toISOString();
-        order.history.push({ at: new Date().toISOString(), action: "zid_status_indelivery" });
+        order.zidStatusError = "";
+        order.history.push({ at: new Date().toISOString(), action: `zid_status_${zidStatus}` });
       } catch (error) {
         order.zidStatusError = error.message;
       }
