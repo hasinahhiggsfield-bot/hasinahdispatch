@@ -405,9 +405,11 @@ els.zidSyncBtn?.addEventListener("click", async () => {
     const notReady = result.zidSync?.notReady || 0;
     const notJeddah = result.zidSync?.notJeddah || 0;
     const missingNumber = result.zidSync?.missingNumber || 0;
+    const excluded = result.zidSync?.excluded || 0;
+    const removedExcluded = result.zidSync?.removedExcluded || 0;
     alert(imported
-      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nتم فحصها: ${checked}`
-      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
+      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nطلبات إرجاع/استرجاع مستبعدة: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nتم فحصها: ${checked}`
+      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nإرجاع/استرجاع مستبعد: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
   } catch (error) {
     alert(error.message);
   } finally {
