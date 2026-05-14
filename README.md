@@ -71,8 +71,10 @@ ZID_WEBHOOK_USERNAME=hasinah
 ZID_WEBHOOK_PASSWORD=change-this-long-secret
 ZID_CITY_MATCH=jeddah,جدة,جده,jidda,jedda,jiddah
 ZID_READY_STATUSES=ready,preparing,under_review,under review,review,in_review,in review,جاري التجهيز,قيد التجهيز,قيد المراجعة,تحت المراجعة,جاهز
+ZID_SHIPPING_METHOD_MATCH=مندوب جدة,مندوب جده,jeddah delegate,jeddah courier
 ZID_IN_DELIVERY_STATUS=indelivery
 ZID_DELIVERED_STATUS=delivered
+ZID_SYNC_PAGES=10
 ```
 
 Webhook target URL:
