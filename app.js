@@ -2,11 +2,10 @@ const SESSION_KEY = "hasinah-session-v5";
 const LOCAL_STATE_KEY = "hasinah-preview-state-v5";
 const IS_FILE_MODE = window.location.protocol === "file:";
 const CUSTOMER_PAY = 30;
-const LATE_PAY = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REFRESH_MS = 30 * 1000;
 
-let state = { users: [], orders: [], payments: [] };
+let state = { users: [], orders: [], payments: [], routePlans: [] };
 let session = loadSession();
 let currentView = "dashboard";
 let activeDriverId = "";
@@ -25,6 +24,54 @@ let scannerActive = false;
 let scannerBusy = false;
 let scannerCooldownUntil = 0;
 let scannerProcessedCodes = new Set();
+let neighborhoodCatalog = [];
+let routeSelection = [];
+
+const JEDDAH_BOUNDS = { north: 21.85, south: 21.25, west: 39.04, east: 39.36 };
+const HASINAH_DISPATCH_POINT = { name: "نقطة انطلاق حسينة", lat: 21.5605, lng: 39.1725 };
+const ROUTE_MAP_VERSION = "20260512-3";
+const ROUTE_ZONES = [
+  {
+    id: "west-central",
+    name: "وسط / غرب جدة",
+    tone: "blue",
+    hint: "الروضة، الحمراء، البغدادية، الشرفية",
+    priority: 1,
+    keywords: ["الروضة", "الحمراء", "البغدادية", "الشرفية", "الأندلس", "الخالدية", "الزهراء", "السلامة", "النعيم", "المحمدية", "الفيصلية", "مشرفة", "العزيزية", "الرحاب", "النهضة", "البوادي", "النزهة"]
+  },
+  {
+    id: "north",
+    name: "شمال جدة",
+    tone: "cyan",
+    hint: "أبحر، الشاطئ، المرجان، النعيم",
+    priority: 2,
+    keywords: ["أبحر", "ابحر", "الشاطئ", "المرجان", "الزمرد", "اللؤلؤ", "البساتين", "النورس", "الخليج", "المحمدية", "النزهة"]
+  },
+  {
+    id: "east",
+    name: "شرق جدة",
+    tone: "amber",
+    hint: "السامر، المنار، الأجواد، المروة",
+    priority: 3,
+    keywords: ["السامر", "المنار", "الأجواد", "الاجواد", "المروة", "الصفا", "الصفاء", "الربوة", "الريان", "النخيل", "الحمدانية", "الكوثر", "الفروسية", "الواحة"]
+  },
+  {
+    id: "south",
+    name: "جنوب جدة",
+    tone: "rose",
+    hint: "النسيم، الجامعة، غليل، الأمير فواز",
+    priority: 4,
+    keywords: ["النسيم", "الجامعة", "غليل", "الثغر", "الفيحاء", "الروابي", "الوزيرية", "البلد", "الهنداوية", "الصحيفة", "الكندرة", "الأمير فواز", "امير فواز"]
+  },
+  {
+    id: "far-south",
+    name: "أقصى الجنوب",
+    tone: "violet",
+    hint: "الخمرة، الفضيلة، القرينية",
+    priority: 5,
+    keywords: ["الخمرة", "الفضيلة", "القرينية", "السنابل", "الأجاويد", "الاجاويد", "طيبة", "الرياض", "المرسى"]
+  }
+];
 
 const statusLabels = {
   new: "جديد",
@@ -75,6 +122,14 @@ const els = {
   orderForm: document.querySelector("#orderForm"),
   jobKind: document.querySelector("#jobKind"),
   customFields: document.querySelector("#customFields"),
+  orderNumberInput: document.querySelector('[name="number"]'),
+  orderCustomerInput: document.querySelector('[name="customer"]'),
+  orderPhoneInput: document.querySelector('[name="phone"]'),
+  orderTypeSelect: document.querySelector('[name="type"]'),
+  senderNameInput: document.querySelector('[name="senderName"]'),
+  recipientNameInput: document.querySelector('[name="recipientName"]'),
+  customAmountInput: document.querySelector('[name="customAmount"]'),
+  customConfirmedInput: document.querySelector('[name="customConfirmed"]'),
   orderStats: document.querySelector("#orderStats"),
   driverStats: document.querySelector("#driverStats"),
   ordersBoard: document.querySelector("#ordersBoard"),
@@ -101,6 +156,14 @@ const els = {
   scannerManualInput: document.querySelector("#scannerManualInput"),
   scannerManualBtn: document.querySelector("#scannerManualBtn"),
   closeScannerBtn: document.querySelector("#closeScannerBtn"),
+  routeMapTitle: document.querySelector("#routeMapTitle"),
+  routeMapSummary: document.querySelector("#routeMapSummary"),
+  routeMapCanvas: document.querySelector("#routeMapCanvas"),
+  routeSelectedList: document.querySelector("#routeSelectedList"),
+  routeUnknownList: document.querySelector("#routeUnknownList"),
+  routeAutoBtn: document.querySelector("#routeAutoBtn"),
+  routeClearBtn: document.querySelector("#routeClearBtn"),
+  routeOpenBtn: document.querySelector("#routeOpenBtn"),
   scrollTopBtn: document.querySelector("#scrollTopBtn"),
   searchInput: document.querySelector("#searchInput"),
   categoryFilter: document.querySelector("#categoryFilter"),
@@ -123,8 +186,29 @@ document.querySelectorAll(".nav-tab").forEach((tab) => {
 });
 
 els.jobKind.addEventListener("change", () => {
-  els.customFields.classList.toggle("hidden", els.jobKind.value !== "custom");
+  syncJobKindFields();
 });
+
+function syncJobKindFields() {
+  const isCustom = els.jobKind.value === "custom";
+  els.customFields.classList.toggle("hidden", !isCustom);
+  [els.orderNumberInput, els.orderCustomerInput, els.orderPhoneInput, els.orderTypeSelect].forEach((field) => {
+    if (!field) return;
+    field.required = !isCustom;
+    field.closest("label")?.classList.toggle("hidden", isCustom);
+  });
+  [els.senderNameInput, els.recipientNameInput, els.customAmountInput, els.customConfirmedInput].forEach((field) => {
+    if (!field) return;
+    field.required = isCustom;
+  });
+  if (isCustom) {
+    els.orderNumberInput.value = "";
+    els.orderCustomerInput.value = "";
+    els.orderPhoneInput.value = "";
+  }
+}
+
+syncJobKindFields();
 
 els.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -261,8 +345,30 @@ els.scannerManualInput?.addEventListener("keydown", (event) => {
   }
 });
 
+els.routeAutoBtn?.addEventListener("click", () => {
+  routeSelection = suggestRouteOrder(routeGroups().known).map((group) => group.key);
+  renderRouteMap();
+  persistRoutePlan();
+});
+
+els.routeClearBtn?.addEventListener("click", () => {
+  routeSelection = [];
+  renderRouteMap();
+  persistRoutePlan();
+});
+
+els.routeOpenBtn?.addEventListener("click", () => {
+  const url = buildGoogleRouteUrl();
+  if (!url) {
+    alert("اختر حي واحد على الأقل لفتح المسار.");
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+});
+
 els.activeDriverSelect.addEventListener("change", () => {
   activeDriverId = els.activeDriverSelect.value;
+  loadRouteSelectionForDriver(activeDriverId);
   render();
 });
 
@@ -293,7 +399,15 @@ els.zidSyncBtn?.addEventListener("click", async () => {
     const result = await api("/api/zid/sync", { method: "POST" });
     applyState(result);
     render();
-    alert(`تمت مزامنة زد. الطلبات المستوردة: ${result.zidSync?.imported || 0}`);
+    const imported = result.zidSync?.imported || 0;
+    const existing = result.zidSync?.existing || 0;
+    const checked = result.zidSync?.checked || 0;
+    const notReady = result.zidSync?.notReady || 0;
+    const notJeddah = result.zidSync?.notJeddah || 0;
+    const missingNumber = result.zidSync?.missingNumber || 0;
+    alert(imported
+      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nتم فحصها: ${checked}`
+      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
   } catch (error) {
     alert(error.message);
   } finally {
@@ -317,7 +431,7 @@ els.orderForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(els.orderForm).entries());
   await api("/api/orders", { method: "POST", body: payload });
   els.orderForm.reset();
-  els.customFields.classList.add("hidden");
+  syncJobKindFields();
   await loadState();
   setView("orders");
   render();
@@ -357,13 +471,14 @@ function applyState(nextState) {
   state = {
     users: Array.isArray(nextState?.users) ? nextState.users : [],
     orders: Array.isArray(nextState?.orders) ? nextState.orders : [],
-    payments: Array.isArray(nextState?.payments) ? nextState.payments : []
+    payments: Array.isArray(nextState?.payments) ? nextState.payments : [],
+    routePlans: Array.isArray(nextState?.routePlans) ? nextState.routePlans : []
   };
   return state;
 }
 
 function updateStateSignature() {
-  const signature = JSON.stringify({ users: state.users, orders: state.orders, payments: state.payments });
+  const signature = JSON.stringify({ users: state.users, orders: state.orders, payments: state.payments, routePlans: state.routePlans });
   const changed = signature !== lastStateSignature;
   lastStateSignature = signature;
   return changed;
@@ -398,7 +513,8 @@ function seedState() {
   return {
     users: [{ id: uid("usr"), role: "admin", name: "يحيى", username: "yahya", password: "123123", phone: "" }],
     orders: [],
-    payments: []
+    payments: [],
+    routePlans: []
   };
 }
 
@@ -407,6 +523,7 @@ function readLocalState() {
     const saved = JSON.parse(localStorage.getItem(LOCAL_STATE_KEY));
     if (Array.isArray(saved?.users) && Array.isArray(saved?.orders)) {
       saved.payments = Array.isArray(saved.payments) ? saved.payments : [];
+      saved.routePlans = Array.isArray(saved.routePlans) ? saved.routePlans : [];
       return saved;
     }
   } catch {
@@ -459,6 +576,13 @@ async function localApi(path, options = {}) {
     return localState;
   }
 
+  const routePlanMatch = path.match(/^\/api\/route-plans\/(.+)$/);
+  if (routePlanMatch && method === "PUT") {
+    saveRoutePlanState(localState, decodeURIComponent(routePlanMatch[1]), options.body || {});
+    writeLocalState(localState);
+    return localState;
+  }
+
   const policyMatch = path.match(/^\/api\/orders\/(.+)\/policy$/);
   if (policyMatch && method === "POST") {
     createShippingPolicy(localState, decodeURIComponent(policyMatch[1]));
@@ -502,7 +626,56 @@ function createAccount(targetState, body) {
   });
 }
 
+function generateCustomTripNumber(targetState) {
+  let number = "";
+  do {
+    number = `TRIP-${Math.floor(100000 + Math.random() * 900000)}`;
+  } while (targetState.orders.some((order) => String(order.number) === number));
+  return number;
+}
+
 function createOrder(targetState, body) {
+  if (body.kind === "custom") {
+    const now = new Date().toISOString();
+    const customAmount = Number(body.customAmount || 0);
+    const timerHours = Number(body.timerHours || 24);
+    const senderName = String(body.senderName || body.customer || "").trim();
+    const recipientName = String(body.recipientName || "").trim();
+    if (!senderName || !recipientName || !body.area) throw new Error("المشوار الخاص يحتاج اسم المرسل واسم المستلم والحي.");
+    if (!customAmount || customAmount <= 0) throw new Error("المشوار الخاص يحتاج مبلغ محدد.");
+    if (!body.customConfirmed) throw new Error("أكد تفاصيل المشوار الخاص قبل حفظه.");
+    targetState.orders.unshift({
+      id: uid("ord"),
+      kind: "custom",
+      number: String(body.number || generateCustomTripNumber(targetState)).trim(),
+      type: "Custom delivery",
+      flowType: "custom",
+      customer: recipientName,
+      senderName,
+      recipientName,
+      customNote: String(body.customNote || "").trim(),
+      customConfirmed: true,
+      confirmedAt: now,
+      phone: normalizePhone(body.phone),
+      area: String(body.area).trim(),
+      driverId: String(body.driverId || "").trim(),
+      assignedAt: body.driverId ? now : "",
+      customAmount,
+      timerHours: Math.max(1, timerHours || 24),
+      requestDate: body.requestDate ? new Date(body.requestDate).toISOString() : now,
+      orderCreatedAt: now,
+      status: body.driverId ? "pending_acceptance" : "new",
+      acceptedAt: "",
+      pickedUpAt: "",
+      deadlineAt: "",
+      delayRequests: [],
+      appeals: [],
+      createdAt: now,
+      updatedAt: now,
+      history: [{ at: now, action: "created" }]
+    });
+    return;
+  }
   if (!body.number || !body.customer || !body.phone || !body.area) {
     throw new Error("رقم الطلب والاسم ورقم الواتساب والحي مطلوبة.");
   }
@@ -562,6 +735,23 @@ function createPayment(targetState, body) {
   });
 }
 
+function saveRoutePlanState(targetState, driverId, body) {
+  targetState.routePlans = Array.isArray(targetState.routePlans) ? targetState.routePlans : [];
+  const cleanDriverId = String(driverId || "").trim();
+  const neighborhoodKeys = Array.isArray(body.neighborhoodKeys) ? body.neighborhoodKeys.map((key) => String(key)).filter(Boolean) : [];
+  if (!targetState.users.some((user) => user.id === cleanDriverId && user.role === "driver")) {
+    throw new Error("لم يتم العثور على السائق لحفظ المسار.");
+  }
+  const now = new Date().toISOString();
+  const existing = targetState.routePlans.find((plan) => plan.driverId === cleanDriverId);
+  if (existing) {
+    existing.neighborhoodKeys = neighborhoodKeys;
+    existing.updatedAt = now;
+  } else {
+    targetState.routePlans.push({ driverId: cleanDriverId, neighborhoodKeys, updatedAt: now });
+  }
+}
+
 function updateOrderState(targetState, id, patch) {
   const order = targetState.orders.find((item) => item.id === id);
   if (!order) throw new Error("لم يتم العثور على الطلب.");
@@ -612,7 +802,7 @@ function updateOrderState(targetState, id, patch) {
   if (patch.action === "approve_request") approveRequest(order, patch.requestId, now);
   if (patch.action === "reject_request") rejectRequest(order, patch.requestId);
 
-  if (["accepted", "picked_up"].includes(order.status) && isLate(order, now)) order.status = "late";
+  if (order.kind === "custom" && ["accepted", "picked_up"].includes(order.status) && isLate(order, now)) order.status = "late";
   order.updatedAt = now.toISOString();
   order.history = Array.isArray(order.history) ? order.history : [];
   order.history.push({ at: now.toISOString(), action: patch.action || "updated" });
@@ -678,15 +868,20 @@ function deleteShippingPolicy(targetState, id) {
 function acceptOrder(order, now) {
   order.status = "accepted";
   order.acceptedAt = now.toISOString();
-  const hours = order.kind === "custom" ? Number(order.timerHours || 24) : 24;
-  order.deadlineAt = new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
+  if (order.kind === "custom") {
+    const hours = Number(order.timerHours || 24);
+    order.deadlineAt = new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
+  } else {
+    order.deadlineAt = "";
+  }
 }
 
 function pickUpOrder(order, now) {
   order.status = "picked_up";
   order.pickedUpAt = now.toISOString();
   order.acceptedAt = order.acceptedAt || now.toISOString();
-  order.deadlineAt = new Date(now.getTime() + DAY_MS).toISOString();
+  if (order.kind !== "custom") order.deadlineAt = "";
+  else order.deadlineAt = order.deadlineAt || new Date(now.getTime() + DAY_MS).toISOString();
   order.cutRemoved = false;
 }
 
@@ -696,7 +891,8 @@ function approveRequest(order, requestId, now) {
   request.status = "approved";
   request.reviewedAt = now.toISOString();
   order.status = order.pickedUpAt ? "picked_up" : "ready";
-  order.deadlineAt = new Date(now.getTime() + DAY_MS).toISOString();
+  if (order.kind === "custom") order.deadlineAt = new Date(now.getTime() + DAY_MS).toISOString();
+  else order.deadlineAt = "";
   order.cutRemoved = true;
 }
 
@@ -731,15 +927,30 @@ function drivers() {
 }
 
 async function loadState() {
+  await loadNeighborhoodCatalog();
   applyState(await api("/api/state"));
   markLateOrders();
   return updateStateSignature();
 }
 
+async function loadNeighborhoodCatalog() {
+  if (neighborhoodCatalog.length) return;
+  try {
+    const response = await fetch(`assets/jeddah-neighborhoods.json?v=${ROUTE_MAP_VERSION}`);
+    if (!response.ok) throw new Error("map data missing");
+    const data = await response.json();
+    neighborhoodCatalog = Array.isArray(data) ? data.filter((item) => item.name && item.lat && item.lng) : [];
+  } catch {
+    neighborhoodCatalog = [];
+  }
+}
+
 function markLateOrders() {
-  const now = new Date();
   state.orders.forEach((order) => {
-    if (["accepted", "picked_up"].includes(order.status) && isLate(order, now)) order.status = "late";
+    if (order.kind !== "custom") {
+      order.deadlineAt = "";
+      if (order.status === "late") order.status = order.pickedUpAt ? "picked_up" : "accepted";
+    }
   });
 }
 
@@ -789,7 +1000,7 @@ function stopRefresh() {
 function navigateView(view) {
   const user = currentUser();
   if (!user) return;
-  const targetView = user.role === "driver" ? "driver" : view;
+  const targetView = user.role === "driver" && !["driver", "routeMap"].includes(view) ? "driver" : view;
   if (targetView === currentView || document.body.classList.contains("is-view-loading")) return;
   document.body.dataset.transitionLabel = "جاري فتح الصفحة";
   document.body.classList.add("is-view-loading");
@@ -804,19 +1015,20 @@ function navigateView(view) {
 function setView(view) {
   const user = currentUser();
   if (!user) return;
-  if (user.role === "driver") view = "driver";
+  if (user.role === "driver" && !["driver", "routeMap"].includes(view)) view = "driver";
   currentView = view;
   document.body.dataset.view = view;
   document.querySelectorAll(".nav-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === view));
   const sectionView = view === "zidOrders" ? "orders" : view;
   document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active-view", section.id === `${sectionView}View`));
-  els.searchInput.parentElement.classList.toggle("hidden", ["dashboard", "submit", "addDriver", "accounts", "requests"].includes(view));
+  els.searchInput.parentElement.classList.toggle("hidden", ["dashboard", "submit", "addDriver", "accounts", "requests", "routeMap"].includes(view));
   els.viewTitle.textContent = { dashboard: "Dashboard", submit: "إضافة طلب", orders: "لوحة الطلبات", driver: "السائق", accounts: "الحسابات", requests: "المراجعة" }[view];
   els.viewTitle.textContent = {
     dashboard: "Dashboard",
     submit: "إضافة طلب",
     orders: "عرض الطلبات",
     driver: "تتبع السائقين",
+    routeMap: "مخطط المسار",
     addDriver: "إضافة سائق",
     accounts: "الحسابات",
     requests: "المراجعة"
@@ -836,6 +1048,7 @@ function render() {
   renderCounts();
   renderOrdersBoard();
   renderDriverQueue();
+  renderRouteMap();
   renderAccountList();
   renderRequests();
 }
@@ -856,9 +1069,11 @@ function ensureDriverSelection() {
   const user = currentUser();
   if (user.role === "driver") {
     activeDriverId = user.id;
+    loadRouteSelectionForDriver(activeDriverId);
     return;
   }
   if (!drivers().some((driver) => driver.id === activeDriverId)) activeDriverId = drivers()[0]?.id || "";
+  loadRouteSelectionForDriver(activeDriverId);
 }
 
 function renderDriverOptions() {
@@ -1007,6 +1222,7 @@ function renderOpsQueue() {
 function renderDriverScorecards() {
   const driverCards = drivers().map((driver, index) => {
     const metrics = driverMetrics(driver.id);
+    const progress = routePlanProgress(driver.id);
     return `
       <article class="scorecard" style="--delay:${index * 55}ms">
         <div class="scorecard-top">
@@ -1030,6 +1246,12 @@ function renderDriverScorecards() {
           <span>${metrics.late} متأخر</span>
           <span>${metrics.avgDelivery}</span>
         </div>
+        ${progress.planned.length ? `
+          <div class="scorecard-route">
+            <strong>${escapeHtml(progress.current ? `حالياً: ${progress.current.name}` : "المسار مكتمل")}</strong>
+            <span>${escapeHtml(progress.current ? `${progress.current.delivered}/${progress.current.total} مكتمل في الحي الحالي` : `${progress.completed}/${progress.planned.length} أحياء مكتملة`)}</span>
+          </div>
+        ` : ""}
       </article>
     `;
   });
@@ -1213,8 +1435,480 @@ function renderDriverQueue() {
   els.driverRouteSummary.textContent = orders.length ? `${orders.length} طلبات في الفلتر الحالي. المستحق قبل الدفعات ${formatMoney(earned)}، والمدفوع ${formatMoney(paid)}.` : `لا توجد طلبات في الفلتر الحالي. المدفوع ${formatMoney(paid)} والمتبقي ${formatMoney(owed)}.`;
   els.driverOwed.textContent = formatMoney(owed);
   renderStats(els.driverStats, baseOrders);
-  els.driverOrders.innerHTML = `${renderDriverPaymentNotice(activeDriverId, earned, paid, owed)}${orders.length ? orders.map((order) => renderOrderCard(order, "driver")).join("") : getEmptyState("لا توجد طلبات", "ستظهر الطلبات المسندة هنا.")}`;
+  els.driverOrders.innerHTML = `${renderDriverPaymentNotice(activeDriverId, earned, paid, owed)}${renderDriverRouteStatus(activeDriverId)}${orders.length ? orders.map((order) => renderOrderCard(order, "driver")).join("") : getEmptyState("لا توجد طلبات", "ستظهر الطلبات المسندة هنا.")}`;
   wireOrderControls(els.driverOrders);
+}
+
+function routeMapOrders(driverId = activeDriverId) {
+  return driverRouteOrders(driverId);
+}
+
+function driverRouteOrders(driverId) {
+  return state.orders.filter((order) => {
+    if (order.driverId !== driverId || order.status === "cancelled") return false;
+    if (!isClosed(order)) return true;
+    return ["delivered", "completed"].includes(order.status) && isSameDay(order.completedAt || order.updatedAt, new Date());
+  });
+}
+
+function routeGroups(driverId = activeDriverId) {
+  const grouped = new Map();
+  const unknown = [];
+  routeMapOrders(driverId).forEach((order) => {
+    const point = resolveNeighborhoodPoint(order.area, order);
+    if (!point) {
+      unknown.push(order);
+      return;
+    }
+    const key = normalizeAreaName(point.name);
+    const record = grouped.get(key) || {
+      key,
+      name: point.name,
+      nameEn: point.nameEn || "",
+      lat: point.lat,
+      lng: point.lng,
+      orders: [],
+      ready: 0,
+      late: 0,
+      picked: 0,
+      delivered: 0,
+      active: 0
+    };
+    record.orders.push(order);
+    if (order.status === "ready") record.ready += 1;
+    if (order.status === "late") record.late += 1;
+    if (["picked_up", "delayed"].includes(order.status)) record.picked += 1;
+    if (["delivered", "completed"].includes(order.status)) record.delivered += 1;
+    if (!isClosed(order)) record.active += 1;
+    grouped.set(key, record);
+  });
+  const known = [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name, "ar"));
+  if (driverId === activeDriverId) routeSelection = routeSelection.filter((key) => known.some((group) => group.key === key));
+  return { known, unknown };
+}
+
+function renderRouteMap() {
+  if (!els.routeMapCanvas) return;
+  const driver = state.users.find((item) => item.id === activeDriverId);
+  const { known, unknown } = routeGroups();
+  const zones = routePlannerZones(known);
+  const selected = routeSelection.map((key) => known.find((group) => group.key === key)).filter(Boolean);
+  const totalOrders = known.reduce((sum, group) => sum + group.orders.length, 0) + unknown.length;
+  const progress = routePlanProgress(activeDriverId);
+  els.routeMapTitle.textContent = driver ? `مخطط ${driver.name}` : "مخطط مسار السائق";
+  els.routeMapSummary.textContent = known.length
+    ? `${totalOrders} طلبات نشطة في ${known.length} أحياء داخل ${zones.length} مناطق. اختر منطقة كاملة أو رتّب الأحياء يدويا.`
+    : "لا توجد أحياء نشطة لهذا السائق حاليا.";
+
+  els.routeMapCanvas.classList.add("route-planner-canvas");
+  els.routeMapCanvas.innerHTML = `
+    ${renderRouteProgressPanel(progress)}
+    <div class="route-planner-board">
+      ${zones.length ? zones.map((zone) => renderRouteZoneCard(zone)).join("") : getEmptyState("لا توجد مناطق نشطة", "ستظهر المناطق عندما يتم إسناد طلبات نشطة للسائق.")}
+    </div>
+  `;
+  els.routeMapCanvas.querySelectorAll("[data-route-area]").forEach((button) => {
+    button.addEventListener("click", () => toggleRouteArea(button.dataset.routeArea));
+  });
+  els.routeMapCanvas.querySelectorAll("[data-route-zone]").forEach((button) => {
+    button.addEventListener("click", () => addRouteZone(button.dataset.routeZone));
+  });
+  els.routeMapCanvas.querySelectorAll("[data-route-zone-remove]").forEach((button) => {
+    button.addEventListener("click", () => removeRouteZone(button.dataset.routeZoneRemove));
+  });
+
+  els.routeSelectedList.innerHTML = selected.length
+    ? selected.map((group, index) => `
+        <article class="route-stop">
+          <span>${index + 1}</span>
+          <div><strong>${escapeHtml(group.name)}</strong><small>${routeZoneForGroup(group).name} - ${group.orders.length} طلبات</small></div>
+        </article>
+      `).join("")
+    : getEmptyState("لم يتم اختيار ترتيب", "اختر منطقة كاملة أو اضغط الأحياء حسب ترتيب التسليم.");
+
+  els.routeUnknownList.innerHTML = unknown.length
+    ? `<div class="route-unknown-card"><strong>أحياء تحتاج مراجعة</strong><p>${unknown.map((order) => escapeHtml(order.area || order.number)).join("، ")}</p></div>`
+    : "";
+  els.routeOpenBtn.disabled = !selected.length;
+}
+
+function routePlannerZones(groups) {
+  const map = new Map();
+  groups.forEach((group) => {
+    const zone = routeZoneForGroup(group);
+    const record = map.get(zone.id) || { ...zone, groups: [], orders: 0, ready: 0, picked: 0, late: 0, delivered: 0, active: 0 };
+    record.groups.push(group);
+    record.orders += group.orders.length;
+    record.ready += group.ready;
+    record.picked += group.picked;
+    record.late += group.late;
+    record.delivered += group.delivered;
+    record.active += group.active;
+    map.set(zone.id, record);
+  });
+  return [...map.values()]
+    .map((zone) => ({ ...zone, groups: zone.groups.sort(routeGroupSort) }))
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, "ar"));
+}
+
+function renderRouteProgressPanel(progress) {
+  if (!progress.planned.length) {
+    return `
+      <section class="route-progress-panel">
+        <div>
+          <span class="zone-kicker">تقدم المسار</span>
+          <h4>لم يتم حفظ ترتيب بعد</h4>
+          <p>اختر الأحياء أو اضغط اقتراح تلقائي ليظهر تقدم السائق حيّ حيّ للإدارة.</p>
+        </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="route-progress-panel">
+      <div>
+        <span class="zone-kicker">تقدم المسار</span>
+        <h4>${escapeHtml(progress.current ? `السائق الآن في ${progress.current.name}` : "تم إنجاز المسار")}</h4>
+        <p>${escapeHtml(progress.current ? `أنجز ${progress.current.delivered} من ${progress.current.total} طلب في هذا الحي، والمتبقي ${progress.current.remaining}.` : "كل الأحياء المحددة في المسار مكتملة.")}</p>
+      </div>
+      <div class="route-progress-track">
+        ${progress.planned.map((stop, index) => `
+          <article class="route-progress-stop ${stop.done ? "done" : stop.current ? "current" : ""}">
+            <span>${index + 1}</span>
+            <strong>${escapeHtml(stop.name)}</strong>
+            <small>${stop.delivered}/${stop.total} مكتمل</small>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderRouteZoneCard(zone) {
+  const selectedCount = zone.groups.filter((group) => routeSelection.includes(group.key)).length;
+  const fullySelected = selectedCount === zone.groups.length && zone.groups.length > 0;
+  return `
+    <article class="route-zone-card" data-tone="${zone.tone}">
+      <div class="route-zone-head">
+        <div>
+          <span class="zone-kicker">${escapeHtml(zone.hint)}</span>
+          <h4>${escapeHtml(zone.name)}</h4>
+        </div>
+        <strong>${zone.orders}</strong>
+      </div>
+      <div class="route-zone-metrics">
+        <span>${zone.groups.length} أحياء</span>
+        <span>${zone.ready} جاهز</span>
+        <span>${zone.picked} مع السائق</span>
+        <span>${zone.delivered} تم تسليمه</span>
+      </div>
+      <div class="route-neighborhood-chips">
+        ${zone.groups.map((group) => renderRoutePlannerChip(group)).join("")}
+      </div>
+      <div class="route-zone-actions">
+        <button class="secondary-button" data-route-zone="${escapeAttribute(zone.id)}" type="button">${fullySelected ? "مضافة للترتيب" : "اختيار المنطقة"}</button>
+        ${selectedCount ? `<button class="ghost-button" data-route-zone-remove="${escapeAttribute(zone.id)}" type="button">إزالة المنطقة</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderRoutePlannerChip(group) {
+  const selectedIndex = routeSelection.indexOf(group.key);
+  const selected = selectedIndex >= 0;
+  const complete = group.orders.length > 0 && group.delivered === group.orders.length;
+  const tone = group.late ? "danger" : complete ? "success" : group.picked ? "blue" : group.ready ? "warning" : "blue";
+  return `
+    <button class="route-neighborhood-chip ${selected ? "selected" : ""}" data-tone="${tone}" data-route-area="${escapeAttribute(group.key)}" type="button">
+      ${selected ? `<span>${selectedIndex + 1}</span>` : ""}
+      <strong>${escapeHtml(group.name)}</strong>
+      <small>${group.delivered}/${group.orders.length}</small>
+    </button>
+  `;
+}
+
+function routeZoneForGroup(group) {
+  const normalized = normalizeAreaName(`${group.name} ${group.nameEn || ""}`);
+  const keywordZone = ROUTE_ZONES.find((zone) => zone.keywords.some((keyword) => normalized.includes(normalizeAreaName(keyword))));
+  if (keywordZone) return keywordZone;
+  if (group.lat >= 21.63) return ROUTE_ZONES.find((zone) => zone.id === "north");
+  if (group.lat <= 21.38) return ROUTE_ZONES.find((zone) => zone.id === "far-south");
+  if (group.lat <= 21.48) return ROUTE_ZONES.find((zone) => zone.id === "south");
+  if (group.lng >= 39.22) return ROUTE_ZONES.find((zone) => zone.id === "east");
+  return ROUTE_ZONES.find((zone) => zone.id === "west-central");
+}
+
+function routeGroupSort(a, b) {
+  return haversineKm(HASINAH_DISPATCH_POINT, a) - haversineKm(HASINAH_DISPATCH_POINT, b) || a.name.localeCompare(b.name, "ar");
+}
+
+function routePlanForDriver(driverId) {
+  return (Array.isArray(state.routePlans) ? state.routePlans : []).find((plan) => plan.driverId === driverId) || null;
+}
+
+function loadRouteSelectionForDriver(driverId) {
+  const plan = routePlanForDriver(driverId);
+  routeSelection = Array.isArray(plan?.neighborhoodKeys) ? [...plan.neighborhoodKeys] : [];
+}
+
+async function persistRoutePlan() {
+  if (!activeDriverId) return;
+  saveRoutePlanState(state, activeDriverId, { neighborhoodKeys: routeSelection });
+  try {
+    applyState(await api(`/api/route-plans/${encodeURIComponent(activeDriverId)}`, {
+      method: "PUT",
+      body: { neighborhoodKeys: routeSelection }
+    }));
+    loadRouteSelectionForDriver(activeDriverId);
+    updateStateSignature();
+    renderDashboard();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+function routePlanProgress(driverId) {
+  const groups = routeGroupsForDriver(driverId).known;
+  const byKey = new Map(groups.map((group) => [group.key, group]));
+  const savedKeys = routePlanForDriver(driverId)?.neighborhoodKeys;
+  const plannedKeys = (Array.isArray(savedKeys) ? savedKeys : driverId === activeDriverId ? routeSelection : []).filter((key) => byKey.has(key));
+  const planned = plannedKeys.map((key) => {
+    const group = byKey.get(key);
+    const done = group.orders.length > 0 && group.delivered === group.orders.length;
+    return {
+      key,
+      name: group.name,
+      total: group.orders.length,
+      delivered: group.delivered,
+      remaining: Math.max(0, group.orders.length - group.delivered),
+      done,
+      current: false
+    };
+  });
+  const current = planned.find((stop) => !stop.done) || null;
+  if (current) current.current = true;
+  return { planned, current, completed: planned.filter((stop) => stop.done).length };
+}
+
+function routeGroupsForDriver(driverId) {
+  return routeGroups(driverId);
+}
+
+function renderRouteMarker(group) {
+  const order = routeSelection.indexOf(group.key);
+  const selected = order >= 0;
+  const tone = group.late ? "danger" : group.picked ? "blue" : group.ready ? "success" : "warning";
+  return `
+    <button class="neighborhood-marker ${selected ? "selected" : ""}" data-tone="${tone}" data-route-area="${escapeAttribute(group.key)}" style="--x:${routeX(group.lng).toFixed(2)}%; --y:${routeY(group.lat).toFixed(2)}%;" type="button">
+      ${selected ? `<span class="route-rank">${order + 1}</span>` : ""}
+      <strong>${escapeHtml(group.name)}</strong>
+      <small>${group.orders.length}</small>
+    </button>
+  `;
+}
+
+function toggleRouteArea(key) {
+  const index = routeSelection.indexOf(key);
+  if (index >= 0) routeSelection.splice(index, 1);
+  else routeSelection.push(key);
+  renderRouteMap();
+  persistRoutePlan();
+}
+
+function addRouteZone(zoneId) {
+  const { known } = routeGroups();
+  const zone = routePlannerZones(known).find((item) => item.id === zoneId);
+  if (!zone) return;
+  zone.groups.forEach((group) => {
+    if (!routeSelection.includes(group.key)) routeSelection.push(group.key);
+  });
+  renderRouteMap();
+  persistRoutePlan();
+}
+
+function removeRouteZone(zoneId) {
+  const { known } = routeGroups();
+  const zone = routePlannerZones(known).find((item) => item.id === zoneId);
+  if (!zone) return;
+  const keys = new Set(zone.groups.map((group) => group.key));
+  routeSelection = routeSelection.filter((key) => !keys.has(key));
+  renderRouteMap();
+  persistRoutePlan();
+}
+
+function suggestRouteOrder(groups) {
+  return routePlannerZones(groups).flatMap((zone) => zone.groups);
+}
+
+function buildGoogleRouteUrl() {
+  const { known } = routeGroups();
+  const selected = routeSelection.map((key) => known.find((group) => group.key === key)).filter(Boolean);
+  if (!selected.length) return "";
+  const destination = selected[selected.length - 1];
+  const waypoints = selected.slice(0, -1).map((group) => `${group.lat},${group.lng}`);
+  const params = new URLSearchParams({
+    api: "1",
+    origin: `${HASINAH_DISPATCH_POINT.lat},${HASINAH_DISPATCH_POINT.lng}`,
+    destination: `${destination.lat},${destination.lng}`,
+    travelmode: "driving"
+  });
+  if (waypoints.length) params.set("waypoints", waypoints.join("|"));
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
+}
+
+function resolveNeighborhoodPoint(area, order = {}) {
+  const fromMap = coordinatesFromMapUrl(order.mapUrl);
+  if (fromMap) return { name: area || "موقع العميل", nameEn: "", ...fromMap };
+  const normalized = normalizeAreaName(area);
+  if (!normalized) return null;
+  const aliases = routeAreaAliases();
+  if (aliases[normalized]) return aliases[normalized];
+  const exact = neighborhoodCatalog.find((item) => routeNameKeys(item).some((key) => key === normalized));
+  if (exact) return canonicalRoutePoint(exact, aliases);
+  const partial = neighborhoodCatalog.find((item) => {
+    return routeNameKeys(item).some((key) => key && (normalized.includes(key) || key.includes(normalized)));
+  });
+  if (partial) return canonicalRoutePoint(partial, aliases);
+  const fuzzy = bestRouteFuzzyMatch(normalized);
+  return fuzzy ? canonicalRoutePoint(fuzzy, aliases) : null;
+}
+
+function routeAreaAliases() {
+  const byName = Object.fromEntries(neighborhoodCatalog.map((item) => [normalizeAreaName(item.name), item]));
+  const point = (name) => byName[normalizeAreaName(name)];
+  const baghdadiyah = averageRoutePoint("البغدادية", point("البغدادية الشرقية"), point("البغدادية الغربية"));
+  const aliases = {
+    [normalizeAreaName("البغدادية")]: baghdadiyah,
+    [normalizeAreaName("baghdadiyah")]: baghdadiyah,
+    [normalizeAreaName("baghdadia")]: baghdadiyah,
+    [normalizeAreaName("al baghdadiyah")]: baghdadiyah,
+    [normalizeAreaName("al rawdah")]: point("الروضة"),
+    [normalizeAreaName("rawda")]: point("الروضة"),
+    [normalizeAreaName("rawdha")]: point("الروضة"),
+    [normalizeAreaName("rawdah")]: point("الروضة"),
+    [normalizeAreaName("al hamra")]: point("الحمراء"),
+    [normalizeAreaName("hamra")]: point("الحمراء"),
+    [normalizeAreaName("hamrah")]: point("الحمراء"),
+    [normalizeAreaName("al naseem")]: point("النسيم"),
+    [normalizeAreaName("naseem")]: point("النسيم"),
+    [normalizeAreaName("al salamah")]: point("السلامة"),
+    [normalizeAreaName("salamah")]: point("السلامة"),
+    [normalizeAreaName("al safa")]: point("الصفاء"),
+    [normalizeAreaName("safa")]: point("الصفاء"),
+    [normalizeAreaName("الصفا")]: point("الصفاء"),
+    [normalizeAreaName("ابحر الشمالية")]: point("أبحر الشمالية"),
+    [normalizeAreaName("ابحر الجنوبية")]: point("أبحر الجنوبية")
+  };
+  return Object.fromEntries(Object.entries(aliases).filter(([, value]) => value));
+}
+
+function routeNameKeys(item) {
+  return [item.name, item.nameEn, stripDirectionWords(item.name), stripDirectionWords(item.nameEn)]
+    .map((value) => normalizeAreaName(value))
+    .filter(Boolean);
+}
+
+function canonicalRoutePoint(point, aliases = routeAreaAliases()) {
+  const keys = routeNameKeys(point);
+  const baghdadKey = normalizeAreaName("البغدادية");
+  if (keys.some((key) => key.includes(baghdadKey)) && aliases[baghdadKey]) return aliases[baghdadKey];
+  return point;
+}
+
+function bestRouteFuzzyMatch(normalized) {
+  let best = null;
+  neighborhoodCatalog.forEach((item) => {
+    routeNameKeys(item).forEach((key) => {
+      const score = routeSimilarity(normalized, key);
+      if (score >= 0.76 && (!best || score > best.score)) best = { item, score };
+    });
+  });
+  return best?.item || null;
+}
+
+function routeSimilarity(a, b) {
+  if (!a || !b) return 0;
+  if (a.includes(b) || b.includes(a)) return Math.min(a.length, b.length) / Math.max(a.length, b.length);
+  const distance = levenshteinDistance(a, b);
+  return 1 - distance / Math.max(a.length, b.length, 1);
+}
+
+function levenshteinDistance(a, b) {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const saved = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+      diagonal = saved;
+    }
+  }
+  return previous[b.length];
+}
+
+function stripDirectionWords(value) {
+  return String(value || "")
+    .replace(/\b(east|eastern|west|western|north|northern|south|southern)\b/gi, "")
+    .replace(/(?:ال)?(?:شرقية|الغربية|الشمالية|الجنوبية|شرق|غرب|شمال|جنوب)/g, "");
+}
+
+function normalizeAreaName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u064B-\u065F\u0670\u0300-\u036f]/g, "")
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/ؤ/g, "و")
+    .replace(/ئ/g, "ي")
+    .replace(/ة/g, "ه")
+    .replace(/\b(al|el)\b/g, "")
+    .replace(/^حي\s+/u, "")
+    .replace(/^ال/u, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function averageRoutePoint(name, ...points) {
+  const valid = points.filter(Boolean);
+  if (!valid.length) return null;
+  return {
+    name,
+    nameEn: valid.map((point) => point.nameEn).filter(Boolean).join(" / "),
+    lat: valid.reduce((sum, point) => sum + Number(point.lat), 0) / valid.length,
+    lng: valid.reduce((sum, point) => sum + Number(point.lng), 0) / valid.length
+  };
+}
+
+function coordinatesFromMapUrl(mapUrl = "") {
+  const value = String(mapUrl || "");
+  const match = value.match(/(?:query=|q=|@)(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+}
+
+function routeX(lng) {
+  return Math.max(8, Math.min(96, ((Number(lng) - JEDDAH_BOUNDS.west) / (JEDDAH_BOUNDS.east - JEDDAH_BOUNDS.west)) * 100));
+}
+
+function routeY(lat) {
+  return Math.max(5, Math.min(95, ((JEDDAH_BOUNDS.north - Number(lat)) / (JEDDAH_BOUNDS.north - JEDDAH_BOUNDS.south)) * 100));
+}
+
+function haversineKm(a, b) {
+  const toRad = (value) => (Number(value) * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 function renderDriverPaymentNotice(driverId, earned, paid, owed) {
@@ -1245,6 +1939,25 @@ function renderDriverPaymentNotice(driverId, earned, paid, owed) {
                 .join("")
             : `<div class="empty-state compact-empty"><div><strong>لا توجد دفعات مسجلة</strong><br /><span>عند رفع إثبات دفع من الإدارة سيظهر هنا.</span></div></div>`
         }
+      </div>
+    </section>
+  `;
+}
+
+function renderDriverRouteStatus(driverId) {
+  const progress = routePlanProgress(driverId);
+  if (!progress.planned.length) return "";
+  return `
+    <section class="driver-route-status">
+      <div>
+        <span class="zone-kicker">حالة المسار</span>
+        <h4>${escapeHtml(progress.current ? `أنت الآن في ${progress.current.name}` : "تم إنجاز كل أحياء المسار")}</h4>
+        <p>${escapeHtml(progress.current ? `تم تسليم ${progress.current.delivered} من ${progress.current.total} طلب في هذا الحي. بعد اكتماله انتقل للحي التالي في الترتيب.` : "كل الطلبات داخل المسار المحدد مكتملة.")}</p>
+      </div>
+      <div class="driver-route-mini">
+        ${progress.planned.map((stop, index) => `
+          <span class="${stop.done ? "done" : stop.current ? "current" : ""}">${index + 1}. ${escapeHtml(stop.name)} ${stop.delivered}/${stop.total}</span>
+        `).join("")}
       </div>
     </section>
   `;
@@ -1343,12 +2056,18 @@ function renderOrderCard(order, mode) {
   const productLine = products.length
     ? `<div class="product-strip">${products.map((product) => `<span class="product-chip">${product.image ? `<img src="${escapeAttribute(product.image)}" alt="" loading="lazy" />` : ""}<b>${escapeHtml(product.name)}</b>${product.quantity > 1 ? `<small>x${product.quantity}</small>` : ""}</span>`).join("")}</div>`
     : "";
+  const customDetails = getFlowType(order) === "custom"
+    ? `<span><strong>المرسل:</strong> ${escapeHtml(order.senderName || "غير محدد")}</span><span><strong>المستلم:</strong> ${escapeHtml(order.recipientName || order.customer || "غير محدد")}</span>${order.customConfirmed ? `<span><strong>التأكيد:</strong> مؤكد ${order.confirmedAt ? escapeHtml(formatDateTime(order.confirmedAt)) : ""}</span>` : ""}${order.customNote ? `<span><strong>ملاحظة:</strong> ${escapeHtml(order.customNote)}</span>` : ""}`
+    : "";
   const serviceDetails =
     getFlowType(order) === "replacement"
       ? `<span><strong>المسترجع:</strong> ${escapeHtml(order.returnedOrderNumber || order.number)}</span><span><strong>يسلم للعميل:</strong> ${escapeHtml(order.replacementOrderNumber || "غير محدد")}</span>`
       : getFlowType(order) === "return"
         ? `<span><strong>طلب الإرجاع:</strong> ${escapeHtml(order.returnedOrderNumber || order.number)}</span>`
-        : "";
+        : customDetails;
+  const phoneLine = order.phone
+    ? `<span><strong>واتساب:</strong> <a href="${escapeAttribute(whatsappLink(order.phone))}" target="_blank" rel="noreferrer">${escapeHtml(order.phone)}</a></span>`
+    : "";
   return `
     <article class="order-card" data-priority="${escapeHtml(order.kind)}">
       <div class="order-card-header">
@@ -1361,10 +2080,10 @@ function renderOrderCard(order, mode) {
       </div>
 
       <div class="order-details">
-        <span><strong>واتساب:</strong> <a href="${escapeAttribute(whatsappLink(order.phone))}" target="_blank" rel="noreferrer">${escapeHtml(order.phone)}</a></span>
+        ${phoneLine}
         <span><strong>السائق:</strong> ${escapeHtml(driver?.name || "غير مسند")}</span>
         <span><strong>الموعد النهائي:</strong> ${escapeHtml(deadline)}</span>
-        <span><strong>مستحق السائق:</strong> ${pay} ريال${order.status === "late" && order.kind === "customer" ? " (خصم تأخير)" : ""}</span>
+        <span><strong>مستحق السائق:</strong> ${pay} ريال</span>
         ${zidLine}
         ${locationLine}
         ${policyLine}
@@ -1380,7 +2099,7 @@ function renderOrderCard(order, mode) {
         ${canPickup ? `<button class="primary-button" data-action="pickup" data-id="${order.id}" type="button">استلمت الطلب</button>` : ""}
         ${canComplete ? `<button class="primary-button" data-action="complete" data-id="${order.id}" type="button">تم التوصيل</button>` : ""}
         ${canDelay ? `<button class="secondary-button" data-action="delay_request" data-id="${order.id}" type="button">العميل لا يستطيع الاستلام</button>` : ""}
-        ${canAppeal ? `<button class="secondary-button" data-action="appeal" data-id="${order.id}" type="button">اعتراض على الخصم</button>` : ""}
+        ${canAppeal ? `<button class="secondary-button" data-action="appeal" data-id="${order.id}" type="button">طلب مراجعة التأخير</button>` : ""}
         ${canCreateService ? `<button class="secondary-button" data-action="create_return" data-id="${order.id}" type="button">إنشاء إرجاع</button>` : ""}
         ${canCreateService ? `<button class="secondary-button" data-action="create_replacement" data-id="${order.id}" type="button">إنشاء استبدال</button>` : ""}
         ${mode === "admin" && order.status !== "cancelled" ? `<button class="ghost-button" data-action="cancel" data-id="${order.id}" type="button">إلغاء</button>` : ""}
@@ -1417,7 +2136,7 @@ function wireOrderControls(root) {
         openDelayModal(button.dataset.id);
         return;
       }
-      if (button.dataset.action === "appeal") patch.reason = prompt("ما سبب الاعتراض على الخصم؟") || "السائق اعترض على خصم التأخير.";
+      if (button.dataset.action === "appeal") patch.reason = prompt("ما سبب طلب مراجعة التأخير؟") || "السائق طلب مراجعة التأخير.";
       if (button.dataset.action === "create_replacement") {
         const replacementOrderNumber = prompt("اكتب رقم طلب الاستبدال الذي سيتم تسليمه للعميل:");
         if (!replacementOrderNumber) return;
@@ -1776,14 +2495,12 @@ function policyPngPath(order) {
 }
 
 function isLate(order, now = new Date()) {
-  return order.deadlineAt && now.getTime() > new Date(order.deadlineAt).getTime() && !order.cutRemoved;
+  return order.kind === "custom" && order.deadlineAt && now.getTime() > new Date(order.deadlineAt).getTime() && !order.cutRemoved;
 }
 
 function getPay(order) {
   if (["cancelled", "pending_acceptance", "new", "ready", "accepted", "picked_up", "delayed"].includes(order.status)) return 0;
   if (order.kind === "custom") return Number(order.customAmount || 0);
-  if (order.cutRemoved) return CUSTOMER_PAY;
-  if (order.status === "late" || (order.status === "delivered" && isLate(order))) return LATE_PAY;
   return CUSTOMER_PAY;
 }
 
@@ -1813,7 +2530,7 @@ function driverMetrics(driverId) {
   const orders = state.orders.filter((order) => order.driverId === driverId);
   const delivered = orders.filter((order) => ["delivered", "completed"].includes(order.status));
   const active = orders.filter((order) => !isClosed(order)).length;
-  const lateActive = orders.filter((order) => order.status === "late");
+  const lateActive = orders.filter((order) => order.kind === "custom" && order.status === "late");
   const lateDelivered = delivered.filter((order) => isLate(order));
   const earned = orders.reduce((total, order) => total + getPay(order), 0);
   const paid = payments().filter((payment) => payment.driverId === driverId).reduce((total, payment) => total + Number(payment.amount || 0), 0);
@@ -1939,6 +2656,14 @@ function setupAmbientPointer() {
     ambientPointerFrame = requestAnimationFrame(() => {
       document.documentElement.style.setProperty("--cursor-x", `${event.clientX}px`);
       document.documentElement.style.setProperty("--cursor-y", `${event.clientY}px`);
+      const map = els.routeMapCanvas;
+      if (map?.contains(event.target)) {
+        const rect = map.getBoundingClientRect();
+        const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+        const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+        map.style.setProperty("--map-cursor-x", `${x}px`);
+        map.style.setProperty("--map-cursor-y", `${y}px`);
+      }
     });
   }, { passive: true });
 }
