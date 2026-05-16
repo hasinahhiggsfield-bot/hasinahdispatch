@@ -947,9 +947,20 @@ async function exchangeZidCode(req, code) {
     payload = { raw: text };
   }
   if (!response.ok) {
-    throw new Error(`Zid authorization failed (${response.status}): ${payload.message || payload.error || text}`);
+    const detail = payload.message || payload.error_description || payload.error || payload.raw || text || response.statusText;
+    throw new Error(`Zid authorization failed (${response.status}): ${formatErrorDetail(detail)}`);
   }
   return payload;
+}
+
+function formatErrorDetail(detail) {
+  if (detail == null) return "";
+  if (typeof detail === "string") return detail;
+  try {
+    return JSON.stringify(detail);
+  } catch {
+    return String(detail);
+  }
 }
 
 function htmlPage(title, message) {
@@ -1457,7 +1468,11 @@ async function handleApi(req, res, url) {
     } catch (error) {
       state.integrations.zidLastError = { at: new Date().toISOString(), message: error.message };
       await writeState(state);
-      send(res, 500, htmlPage("تعذر تفعيل ربط زد", error.message), "text/html; charset=utf-8");
+      if (state.integrations.zid?.access_token || state.integrations.zid?.authorization || state.integrations.zid?.Authorization) {
+        send(res, 200, htmlPage("ربط زد محفوظ", "الربط موجود ومحفوظ. إذا ظهرت هذه الصفحة بعد إعادة التفعيل، فغالباً تم استخدام كود التفعيل مرة ثانية بعد نجاحه."), "text/html; charset=utf-8");
+      } else {
+        send(res, 500, htmlPage("تعذر تفعيل ربط زد", error.message), "text/html; charset=utf-8");
+      }
     }
     return true;
   }
