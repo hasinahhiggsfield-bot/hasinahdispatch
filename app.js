@@ -416,9 +416,10 @@ els.zidSyncBtn?.addEventListener("click", async () => {
     const tooOld = result.zidSync?.tooOld || 0;
     const removedExcluded = result.zidSync?.removedExcluded || 0;
     const removedOld = result.zidSync?.removedOld || 0;
+    const minDate = result.zidSync?.minCreatedAt ? formatDate(result.zidSync.minCreatedAt) : "5 مايو 2026";
     alert(imported
-      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nطلبات أقدم من أمس مستبعدة: ${tooOld}\nطلبات قديمة تم حذفها: ${removedOld}\nطلبات إرجاع/استرجاع مستبعدة: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nتم فحصها: ${checked}`
-      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nأقدم من أمس: ${tooOld}\nطلبات قديمة تم حذفها: ${removedOld}\nإرجاع/استرجاع مستبعد: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
+      ? `تمت مزامنة زد.\nطلبات جديدة: ${imported}\nموجودة مسبقا وتم تحديثها: ${existing}\nطلبات قبل ${minDate} مستبعدة: ${tooOld}\nطلبات قديمة تم حذفها: ${removedOld}\nطلبات إرجاع/استرجاع مستبعدة: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nتم فحصها: ${checked}`
+      : `لا توجد طلبات جديدة في جدة قابلة للمزامنة.\nموجودة مسبقا وتم تحديثها: ${existing}\nغير مطابقة للحالة المطلوبة: ${notReady}\nخارج جدة: ${notJeddah}\nقبل ${minDate}: ${tooOld}\nطلبات قديمة تم حذفها: ${removedOld}\nإرجاع/استرجاع مستبعد: ${excluded}\nطلبات خاطئة تم حذفها: ${removedExcluded}\nبدون رقم طلب: ${missingNumber}\nتم فحصها: ${checked}`);
   } catch (error) {
     alert(error.message);
   } finally {
