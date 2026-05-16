@@ -22,7 +22,7 @@ const ZID_CITY_MATCH = (process.env.ZID_CITY_MATCH || "jeddah,جدة,jidda,jedda
 const ZID_READY_STATUSES = (process.env.ZID_READY_STATUSES || "ready,preparing,under_review,under review,review,جاري التجهيز,قيد المراجعة,تحت المراجعة,جاهز").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
 const ZID_SHIPPING_METHOD_MATCH = (process.env.ZID_SHIPPING_METHOD_MATCH || "مندوب جدة,مندوب جده,jeddah delegate,jeddah courier").split(",").map((item) => item.trim()).filter(Boolean);
 const ZID_EXCLUDED_STATUSES = (process.env.ZID_EXCLUDED_STATUSES || "returned,returning,return requested,return_in_progress,reverse,reverse pickup,refund,refunded,exchange,exchanged,استرجاع,ارجاع,إرجاع,مرتجع,مسترجع,جاري الاسترجاع,جارى الاسترجاع,قيد الاسترجاع,تحت الاسترجاع,تم الاسترجاع,طلب استرجاع,استبدال,مستبدل").split(",").map((item) => item.trim()).filter(Boolean);
-const ZID_SYNC_INCLUDE_DAYS = Number(process.env.ZID_SYNC_INCLUDE_DAYS || 2);
+const ZID_SYNC_MIN_DATE = process.env.ZID_SYNC_MIN_DATE || "2026-05-05";
 const ZID_IN_DELIVERY_STATUS = process.env.ZID_IN_DELIVERY_STATUS || "indelivery";
 const ZID_DELIVERED_STATUS = process.env.ZID_DELIVERED_STATUS || "delivered";
 const ZID_PENDING_RETURN_STATUS = process.env.ZID_PENDING_RETURN_STATUS || "pending_return";
@@ -555,12 +555,13 @@ function zidOrderCreatedAt(order) {
 }
 
 function zidSyncMinCreatedAt() {
-  const days = Math.max(1, Number.isFinite(ZID_SYNC_INCLUDE_DAYS) ? ZID_SYNC_INCLUDE_DAYS : 2);
-  const now = new Date();
-  const riyadhNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
-  riyadhNow.setUTCHours(0, 0, 0, 0);
-  riyadhNow.setUTCDate(riyadhNow.getUTCDate() - (days - 1));
-  return new Date(riyadhNow.getTime() - 3 * 60 * 60 * 1000);
+  const configured = String(ZID_SYNC_MIN_DATE || "2026-05-05").trim();
+  const dateOnly = configured.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const date = dateOnly
+    ? new Date(`${configured}T00:00:00+03:00`)
+    : new Date(configured);
+  if (!Number.isNaN(date.getTime())) return date;
+  return new Date("2026-05-05T00:00:00+03:00");
 }
 
 function isWithinZidSyncWindow(order) {
