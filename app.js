@@ -403,7 +403,7 @@ els.zidSyncBtn?.addEventListener("click", async () => {
   const oldText = els.zidSyncBtn.textContent;
   els.zidSyncBtn.textContent = "جاري المزامنة...";
   try {
-    const result = await api("/api/zid/sync", { method: "POST" });
+    const result = await api("/api/zid/sync-now");
     applyState(result);
     render();
     const imported = result.zidSync?.imported || 0;
