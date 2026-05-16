@@ -705,6 +705,7 @@ async function syncZidOrders(state) {
   };
   const removedExcluded = cleanupExcludedZidOrders(state);
   const removedOld = cleanupOldZidOrders(state);
+  const minCreatedAt = zidSyncMinCreatedAt().getTime();
 
   for (let page = 1; page <= pageLimit; page += 1) {
     const params = new URLSearchParams({
@@ -735,6 +736,10 @@ async function syncZidOrders(state) {
           : Array.isArray(payload.results)
             ? payload.results
             : [];
+    const pageHasFreshOrders = orders.some((item) => {
+      const createdAt = zidOrderCreatedAt(getZidOrder(item));
+      return !createdAt || new Date(createdAt).getTime() >= minCreatedAt;
+    });
     orders.forEach((order) => {
       checked += 1;
       const zidOrder = getZidOrder(order);
@@ -784,6 +789,7 @@ async function syncZidOrders(state) {
         }
       }
     });
+    if (!pageHasFreshOrders) break;
     if (orders.length < 50) break;
   }
 
