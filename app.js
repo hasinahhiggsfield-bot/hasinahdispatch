@@ -467,12 +467,27 @@ els.accountForm.addEventListener("submit", async (event) => {
 
 async function api(path, options = {}) {
   if (IS_FILE_MODE) return localApi(path, options);
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers: options.body ? { "content-type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    cache: "no-store"
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: options.method || "GET",
+      headers: options.body ? { "content-type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      cache: "no-store"
+    });
+  } catch (error) {
+    if (path.startsWith("/api/zid/sync")) {
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      response = await fetch(path.replace(/\/+$/, ""), {
+        method: options.method || "GET",
+        headers: options.body ? { "content-type": "application/json" } : undefined,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+        cache: "no-store"
+      });
+    } else {
+      throw error;
+    }
+  }
   const contentType = response.headers.get("content-type") || "";
   const text = await response.text();
   let result = {};
