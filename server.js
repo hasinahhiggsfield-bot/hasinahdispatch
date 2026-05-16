@@ -1433,7 +1433,7 @@ async function handleApi(req, res, url) {
     return true;
   }
 
-  if (url.pathname === "/api/zid/sync" && req.method === "POST") {
+  if ((url.pathname === "/api/zid/sync" && ["GET", "POST"].includes(req.method)) || (url.pathname === "/api/zid/sync-now" && req.method === "GET")) {
     const result = await syncZidOrders(state);
     await writeState(state);
     send(res, 200, { ...publicState(state), zidSync: result });
